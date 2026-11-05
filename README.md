@@ -94,6 +94,4 @@ govulncheck ./...
 
 ## Лицензия
 
-MIT. Copyright (c) 2026 Andrew Bednarz. Производная работа: Copyright (c) 2026 Eugene Khramchenkov. Полный текст — в `LICENSE`.
-
-Поведение команд и планировщика перенесено из [bed42/mattermost-scheduled-posts-plugin](https://github.com/bed42/mattermost-scheduled-posts-plugin) v1.2.0 (`0b45fb0`), copyright Andrew Bednarz (2026).
+MIT. Copyright (c) 2026 Eugene Khramchenkov. 
