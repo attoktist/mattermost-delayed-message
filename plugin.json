@@ -1,0 +1,46 @@
+{
+  "id": "com.attoktist.scheduled-posts",
+  "name": "Delayed Messages",
+  "description": "Schedule messages to be sent later. No license required.",
+  "version": "1.0.0",
+  "min_server_version": "12.0.0",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64",
+      "darwin-amd64": "server/dist/plugin-darwin-amd64",
+      "darwin-arm64": "server/dist/plugin-darwin-arm64",
+      "windows-amd64": "server/dist/plugin-windows-amd64.exe"
+    }
+  },
+  "webapp": {
+    "bundle_path": "webapp/dist/main.js"
+  },
+  "settings_schema": {
+    "header": "",
+    "footer": "",
+    "settings": [
+      {
+        "key": "PollIntervalSeconds",
+        "display_name": "Poll interval (seconds)",
+        "type": "number",
+        "help_text": "How often the scheduler checks for due messages.",
+        "default": 30
+      },
+      {
+        "key": "MaxAttempts",
+        "display_name": "Max send attempts",
+        "type": "number",
+        "help_text": "Retries before marking a message as failed.",
+        "default": 3
+      },
+      {
+        "key": "DefaultTimezone",
+        "display_name": "Default timezone",
+        "type": "text",
+        "help_text": "IANA timezone when the user has none configured.",
+        "default": "UTC"
+      }
+    ]
+  }
+}
