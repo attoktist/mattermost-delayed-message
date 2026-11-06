@@ -110,7 +110,7 @@ func listMessagesWithPrefix(api kvAPI, prefix string) ([]*ScheduledMessage, erro
 			}
 			data, appErr := api.KVGet(key)
 			if appErr != nil {
-				api.LogWarn("failed to load scheduled message", "key", key, "err", appErr.Error())
+				api.LogWarn("не удалось загрузить отложенное сообщение", "key", key, "err", appErr.Error())
 				continue
 			}
 			if data == nil {
@@ -118,7 +118,7 @@ func listMessagesWithPrefix(api kvAPI, prefix string) ([]*ScheduledMessage, erro
 			}
 			var msg ScheduledMessage
 			if err := json.Unmarshal(data, &msg); err != nil {
-				api.LogWarn("failed to unmarshal scheduled message", "key", key, "err", err.Error())
+				api.LogWarn("не удалось разобрать отложенное сообщение", "key", key, "err", err.Error())
 				continue
 			}
 			msg.normalizeTargets()

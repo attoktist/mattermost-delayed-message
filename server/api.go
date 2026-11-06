@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,15 +17,17 @@ const userIDHeader = "Mattermost-User-Id"
 func (p *Plugin) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get(userIDHeader)
 	if userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		http.Error(w, "нет доступа", http.StatusUnauthorized)
 		return
 	}
 
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/list":
-		p.apiList(w, userID)
+		p.apiList(w, r, userID)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/create":
 		p.apiCreate(w, r, userID)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/send":
+		p.apiSend(w, r, userID)
 	case r.Method == http.MethodDelete && r.URL.Path == "/api/cancel":
 		p.apiCancel(w, r, userID)
 	case r.Method == http.MethodPatch && r.URL.Path == "/api/update":
@@ -34,12 +37,26 @@ func (p *Plugin) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *Plugin) apiList(w http.ResponseWriter, userID string) {
+func (p *Plugin) apiList(w http.ResponseWriter, r *http.Request, userID string) {
+	channelID := r.URL.Query().Get("channel_id")
+	if channelID != "" && !model.IsValidId(channelID) {
+		http.Error(w, "некорректный канал", http.StatusBadRequest)
+		return
+	}
 	msgs, err := listMessagesForUser(p.kv, userID)
 	if err != nil {
-		p.logAPIError("api: list failed", err)
-		http.Error(w, "list failed", http.StatusInternalServerError)
+		p.logAPIError("api: не удалось загрузить список", err)
+		http.Error(w, "не удалось загрузить список", http.StatusInternalServerError)
 		return
+	}
+	if channelID != "" {
+		kept := make([]*ScheduledMessage, 0, len(msgs))
+		for _, msg := range msgs {
+			if msg.Status == StatusPending && slices.Contains(msg.Targets(), channelID) {
+				kept = append(kept, msg)
+			}
+		}
+		msgs = kept
 	}
 	if msgs == nil {
 		msgs = []*ScheduledMessage{}
@@ -62,6 +79,7 @@ type scheduleRequest struct {
 	EndsAfter  int      `json:"ends_after,omitempty"`
 	WindowMs   int64    `json:"window_ms,omitempty"`
 	Messages   []string `json:"messages,omitempty"`
+	Trigger    string   `json:"trigger,omitempty"`
 }
 
 type acceptedSchedule struct {
@@ -75,6 +93,8 @@ type acceptedSchedule struct {
 	endsAt    int64
 	endsAfter int
 	windowMs  int64
+	trigger   string
+	peerID    string
 }
 
 func (p *Plugin) apiCreate(w http.ResponseWriter, r *http.Request, userID string) {
@@ -101,14 +121,16 @@ func (p *Plugin) apiCreate(w http.ResponseWriter, r *http.Request, userID string
 		EndsMode:   fields.endsMode,
 		EndsAt:     fields.endsAt,
 		EndsAfter:  fields.endsAfter,
+		Trigger:    fields.trigger,
+		PeerID:     fields.peerID,
 	}
 	if len(fields.messages) > 0 {
 		msg.Messages = fields.messages
 	}
 	msg.FireAt = randomFireAt(msg.SendAt, msg.WindowMs)
 	if err := saveMessage(p.kv, msg); err != nil {
-		p.logAPIError("api: save failed", err)
-		http.Error(w, "save failed", http.StatusInternalServerError)
+		p.logKVSaveError(err)
+		http.Error(w, "не удалось сохранить", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, msg)
@@ -120,26 +142,46 @@ func (p *Plugin) apiUpdate(w http.ResponseWriter, r *http.Request, userID string
 		return
 	}
 	if body.ID == "" {
-		http.Error(w, "id is required", http.StatusBadRequest)
+		http.Error(w, "нужен id", http.StatusBadRequest)
 		return
 	}
-	fields, ok := p.acceptSchedule(w, userID, &body, false)
-	if !ok {
-		return
-	}
-
 	existing, err := loadMessage(p.kv, userID, body.ID)
 	if err != nil {
-		p.logAPIError("api: load failed", err)
-		http.Error(w, "load failed", http.StatusInternalServerError)
+		p.logAPIError("api: не удалось загрузить", err)
+		http.Error(w, "не удалось загрузить", http.StatusInternalServerError)
 		return
 	}
 	if existing == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, "сообщение не найдено", http.StatusNotFound)
 		return
 	}
 	if existing.Status != StatusPending {
-		http.Error(w, "only pending messages can be edited", http.StatusConflict)
+		http.Error(w, "править можно только ожидающее сообщение", http.StatusConflict)
+		return
+	}
+	// A presence row with no send_at stays presence: only the text changes.
+	if existing.Trigger == TriggerOnline && body.Trigger == "" && strings.TrimSpace(body.SendAt) == "" {
+		body.Message = strings.TrimSpace(body.Message)
+		if body.Message == "" {
+			http.Error(w, "нужен текст", http.StatusBadRequest)
+			return
+		}
+		if textTooLong(p.gate, body.Message, nil) {
+			http.Error(w, "сообщение длиннее допустимого", http.StatusBadRequest)
+			return
+		}
+		existing.Message = body.Message
+		if err := saveMessage(p.kv, existing); err != nil {
+			p.logKVSaveError(err)
+			http.Error(w, "не удалось сохранить", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, existing)
+		return
+	}
+
+	fields, ok := p.acceptSchedule(w, userID, &body, false)
+	if !ok {
 		return
 	}
 
@@ -154,6 +196,8 @@ func (p *Plugin) apiUpdate(w http.ResponseWriter, r *http.Request, userID string
 	existing.EndsMode = fields.endsMode
 	existing.EndsAt = fields.endsAt
 	existing.EndsAfter = fields.endsAfter
+	existing.Trigger = fields.trigger
+	existing.PeerID = fields.peerID
 	if !equalStrings(existing.Messages, fields.messages) {
 		existing.Messages = fields.messages
 		existing.MessageCycle = nil
@@ -162,8 +206,8 @@ func (p *Plugin) apiUpdate(w http.ResponseWriter, r *http.Request, userID string
 	}
 
 	if err := saveMessage(p.kv, existing); err != nil {
-		p.logAPIError("api: update failed", err)
-		http.Error(w, "save failed", http.StatusInternalServerError)
+		p.logKVSaveError(err)
+		http.Error(w, "не удалось сохранить", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, existing)
@@ -177,25 +221,54 @@ func (p *Plugin) apiCancel(w http.ResponseWriter, r *http.Request, userID string
 		return
 	}
 	if body.ID == "" {
-		http.Error(w, "id is required", http.StatusBadRequest)
+		http.Error(w, "нужен id", http.StatusBadRequest)
 		return
 	}
 
 	existing, err := loadMessage(p.kv, userID, body.ID)
 	if err != nil {
-		p.logAPIError("api: load failed", err)
-		http.Error(w, "load failed", http.StatusInternalServerError)
+		p.logAPIError("api: не удалось загрузить", err)
+		http.Error(w, "не удалось загрузить", http.StatusInternalServerError)
 		return
 	}
 	if existing == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, "сообщение не найдено", http.StatusNotFound)
 		return
 	}
 	if err := deleteMessage(p.kv, userID, body.ID); err != nil {
-		p.logAPIError("api: delete failed", err)
-		http.Error(w, "delete failed", http.StatusInternalServerError)
+		p.logAPIError("api: не удалось удалить", err)
+		http.Error(w, "не удалось удалить", http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (p *Plugin) apiSend(w http.ResponseWriter, r *http.Request, userID string) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if body.ID == "" {
+		http.Error(w, "нужен id", http.StatusBadRequest)
+		return
+	}
+	existing, err := loadMessage(p.kv, userID, body.ID)
+	if err != nil {
+		p.logAPIError("api: не удалось загрузить", err)
+		http.Error(w, "не удалось загрузить", http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.Error(w, "сообщение не найдено", http.StatusNotFound)
+		return
+	}
+	if existing.Status != StatusPending {
+		http.Error(w, "править можно только ожидающее сообщение", http.StatusConflict)
+		return
+	}
+	p.deliver(existing, p.getConfiguration().MaxAttempts, true)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -204,54 +277,72 @@ func (p *Plugin) apiCancel(w http.ResponseWriter, r *http.Request, userID string
 var scheduleNow = time.Now
 
 // acceptSchedule applies the create checks. quota is false for update.
-// The order is the body contract: trim, channels, caps, optional quota,
-// permission, rune length, send time, recurrence and extras.
+// The order is the body contract: trigger, trim, channels, caps, optional quota,
+// permission, rune length. TriggerOnline then calls validatePresence and skips
+// send time, recurrence and extras. An empty trigger keeps that timed path.
 func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *scheduleRequest, quota bool) (*acceptedSchedule, bool) {
+	if body.Trigger != "" && body.Trigger != TriggerOnline {
+		http.Error(w, "неизвестный тип отправки", http.StatusBadRequest)
+		return nil, false
+	}
 	body.Message = strings.TrimSpace(body.Message)
 	body.Messages = trimMessages(body.Messages)
 
 	targets := normalizeChannelIDs(body.ChannelIDs, body.ChannelID)
 	if len(targets) == 0 {
-		http.Error(w, "channel_ids is required", http.StatusBadRequest)
+		http.Error(w, "нужен канал", http.StatusBadRequest)
 		return nil, false
 	}
 	if body.Message == "" && len(body.Messages) == 0 {
-		http.Error(w, "message is required", http.StatusBadRequest)
+		http.Error(w, "нужен текст", http.StatusBadRequest)
 		return nil, false
 	}
 	if len(targets) > maxChannelsPerMessage {
-		http.Error(w, "too many channels", http.StatusBadRequest)
+		http.Error(w, "слишком много каналов", http.StatusBadRequest)
 		return nil, false
 	}
 	if len(body.Messages) > maxRotationMessages {
-		http.Error(w, "too many messages", http.StatusBadRequest)
+		http.Error(w, "слишком много текстов", http.StatusBadRequest)
 		return nil, false
 	}
 	if quota {
 		existing, err := listMessagesForUser(p.kv, userID)
 		if err != nil {
-			p.logAPIError("api: list failed", err)
-			http.Error(w, "list failed", http.StatusInternalServerError)
+			p.logAPIError("api: не удалось загрузить список", err)
+			http.Error(w, "не удалось загрузить список", http.StatusInternalServerError)
 			return nil, false
 		}
 		if len(existing) >= maxPendingPerUser {
-			http.Error(w, "pending message limit reached", http.StatusConflict)
+			http.Error(w, "достигнут лимит: 100 отложенных сообщений", http.StatusConflict)
 			return nil, false
 		}
 	}
 	for _, channelID := range targets {
 		if err := checkCanPost(p.gate, userID, channelID); err != nil {
 			if errors.Is(err, errInvalidChannel) {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				http.Error(w, "некорректный канал", http.StatusBadRequest)
 				return nil, false
 			}
-			http.Error(w, "forbidden", http.StatusForbidden)
+			http.Error(w, "нельзя писать в канал", http.StatusForbidden)
 			return nil, false
 		}
 	}
 	if textTooLong(p.gate, body.Message, body.Messages) {
-		http.Error(w, "message exceeds maximum length", http.StatusBadRequest)
+		http.Error(w, "сообщение длиннее допустимого", http.StatusBadRequest)
 		return nil, false
+	}
+	if body.Trigger == TriggerOnline {
+		peer, err := validatePresence(p.gate, userID, targets, body.Repeat, body.WindowMs, body.Messages)
+		if err != nil {
+			writePresenceError(w, err)
+			return nil, false
+		}
+		return &acceptedSchedule{
+			targets: targets,
+			message: body.Message,
+			trigger: TriggerOnline,
+			peerID:  peer,
+		}, true
 	}
 
 	// Empty body timezone is the user's zone, then DefaultTimezone, then UTC.
@@ -300,7 +391,7 @@ func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *sche
 		if body.EndsMode == EndsOn {
 			endsAt, err := parseScheduleTime(body.EndsOn+" 23:59", tz)
 			if err != nil {
-				http.Error(w, "invalid ends_on: "+err.Error(), http.StatusBadRequest)
+				http.Error(w, "некорректная дата окончания: "+err.Error(), http.StatusBadRequest)
 				return nil, false
 			}
 			out.endsAt = endsAt.UnixMilli()
@@ -347,10 +438,21 @@ func normalizeChannelIDs(channelIDs []string, legacyChannelID string) []string {
 	return out
 }
 
+func writePresenceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errInvalidChannel):
+		http.Error(w, "некорректный канал", http.StatusBadRequest)
+	case errors.Is(err, errCannotPost):
+		http.Error(w, "нельзя писать в канал", http.StatusForbidden)
+	default:
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+}
+
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxHTTPBodyBytes))
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		http.Error(w, "некорректное тело", http.StatusBadRequest)
 		return false
 	}
 	return true
@@ -365,5 +467,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 func (p *Plugin) logAPIError(msg string, err error) {
 	if p.API != nil {
 		p.API.LogError(msg, "err", err.Error())
+	}
+}
+
+func (p *Plugin) logKVSaveError(err error) {
+	if p.API != nil {
+		p.API.LogError("не удалось сохранить отложенное сообщение: " + err.Error())
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -47,21 +48,39 @@ const completedRetentionMs int64 = 7 * 24 * 60 * 60 * 1000
 func (p *Plugin) sendDueMessages() {
 	msgs, err := listAllPendingMessages(p.kv)
 	if err != nil {
-		p.logError("scheduler: failed to list messages", "err", err.Error())
+		p.logError("планировщик: не удалось загрузить сообщения", "err", err.Error())
 		return
 	}
 	now := time.Now().UTC().UnixMilli()
 	maxAttempts := p.getConfiguration().MaxAttempts
+	var online []*ScheduledMessage
 
 	for _, msg := range msgs {
 		// GC completed series after the retention window.
 		if msg.Status == StatusCompleted && msg.effectiveFireAt() < now-completedRetentionMs {
 			if err := deleteMessage(p.kv, msg.UserID, msg.ID); err != nil {
-				p.logWarn("scheduler: gc of completed message failed", "id", msg.ID, "err", err.Error())
+				p.logWarn("планировщик: сбой при сборке завершённого сообщения", "id", msg.ID, "err", err.Error())
 			}
 			continue
 		}
 		if msg.Status != StatusPending {
+			continue
+		}
+		if msg.Trigger == TriggerOnline {
+			ok, err := p.presenceReady(msg)
+			if err != nil {
+				if errors.Is(err, errUserGone) {
+					if delErr := deleteMessage(p.kv, msg.UserID, msg.ID); delErr != nil {
+						p.logError("планировщик: не удалось удалить сообщение для отсутствующего пользователя", "id", msg.ID, "err", delErr.Error())
+					}
+					continue
+				}
+				p.logError("не удалось проверить статус собеседника: " + err.Error())
+				continue
+			}
+			if ok {
+				online = append(online, msg)
+			}
 			continue
 		}
 		if msg.effectiveFireAt() > now {
@@ -69,12 +88,24 @@ func (p *Plugin) sendDueMessages() {
 		}
 		p.dispatch(msg, maxAttempts)
 	}
+	sort.SliceStable(online, func(i, j int) bool {
+		return online[i].CreatedAt < online[j].CreatedAt
+	})
+	for _, msg := range online {
+		p.dispatch(msg, maxAttempts)
+	}
 }
 
 func (p *Plugin) dispatch(msg *ScheduledMessage, maxAttempts int) {
+	p.deliver(msg, maxAttempts, false)
+}
+
+// ignoreSchedule skips the due-time guard. POST /api/send sets it so a
+// future SendAt still posts. The scheduler passes false.
+func (p *Plugin) deliver(msg *ScheduledMessage, maxAttempts int, ignoreSchedule bool) {
 	got, err := acquireSendLock(p.kv, msg.ID)
 	if err != nil {
-		p.logWarn("scheduler: lock error", "id", msg.ID, "err", err.Error())
+		p.logWarn("планировщик: ошибка блокировки", "id", msg.ID, "err", err.Error())
 		return
 	}
 	if !got {
@@ -90,14 +121,14 @@ func (p *Plugin) dispatch(msg *ScheduledMessage, maxAttempts int) {
 	}
 	// A series stays pending after a successful send; SendAt moves to the next
 	// occurrence. Do not post that record again until it is due.
-	if current.effectiveFireAt() > time.Now().UTC().UnixMilli() {
+	if !ignoreSchedule && current.effectiveFireAt() > time.Now().UTC().UnixMilli() {
 		return
 	}
 
 	if err := userActive(p.gate, current.UserID); err != nil {
 		if errors.Is(err, errUserGone) {
 			if delErr := deleteMessage(p.kv, current.UserID, current.ID); delErr != nil {
-				p.logError("scheduler: failed to delete message for gone user", "id", current.ID, "err", delErr.Error())
+				p.logError("планировщик: не удалось удалить сообщение для отсутствующего пользователя", "id", current.ID, "err", delErr.Error())
 			}
 			return
 		}
@@ -108,7 +139,7 @@ func (p *Plugin) dispatch(msg *ScheduledMessage, maxAttempts int) {
 	body, sentIdx := pickMessageBody(current)
 	targets := current.Targets()
 	if len(targets) == 0 {
-		p.logError("scheduler: message has no target channels, dropping", "id", current.ID)
+		p.logError("планировщик: нет целевых каналов, сообщение удаляется", "id", current.ID)
 		_ = deleteMessage(p.kv, current.UserID, current.ID)
 		return
 	}
@@ -144,20 +175,20 @@ func (p *Plugin) dispatch(msg *ScheduledMessage, maxAttempts int) {
 	// individually and treat the dispatch as complete — retrying would
 	// duplicate posts in the channels that already succeeded.
 	for _, f := range failures {
-		p.logError("scheduler: per-target send failed (not retrying)",
+		p.logError("планировщик: сбой отправки в канал (повтор не выполняется)",
 			"id", current.ID, "channel_id", f.channelID, "err", f.err)
 	}
 
 	if current.Repeat == "" {
 		if err := deleteMessage(p.kv, current.UserID, current.ID); err != nil {
-			p.logError("scheduler: failed to delete sent message", "id", current.ID, "err", err.Error())
+			p.logError("планировщик: не удалось удалить отправленное сообщение", "id", current.ID, "err", err.Error())
 			// Delivery already happened. StatusSent is not dispatched, so a
 			// failed delete cannot send the same one-shot message again.
 			current.Status = StatusSent
 			current.FireAt = 0
-			current.LastError = "delivered; delete failed"
+			current.LastError = "доставлено; не удалось удалить"
 			if saveErr := saveMessage(p.kv, current); saveErr != nil {
-				p.logError("scheduler: failed to persist sent status after delete failure", "id", current.ID, "err", saveErr.Error())
+				p.logError("планировщик: не удалось сохранить статус после сбоя удаления", "id", current.ID, "err", saveErr.Error())
 			}
 		}
 		return
@@ -177,14 +208,14 @@ func (p *Plugin) failDispatch(current *ScheduledMessage, maxAttempts int, appErr
 			return
 		}
 		current.Status = StatusFailed
-		p.logError("scheduler: giving up on message",
+		p.logError("планировщик: прекращены попытки для сообщения",
 			"id", current.ID, "attempts", current.Attempts, "err", appErrMsg)
 	} else {
-		p.logWarn("scheduler: send failed, will retry",
+		p.logWarn("планировщик: сбой отправки, будет повтор",
 			"id", current.ID, "attempts", current.Attempts, "err", appErrMsg)
 	}
 	if saveErr := saveMessage(p.kv, current); saveErr != nil {
-		p.logError("scheduler: failed to persist failure state", "err", saveErr.Error())
+		p.logError("планировщик: не удалось сохранить состояние сбоя", "err", saveErr.Error())
 	}
 }
 
@@ -202,7 +233,7 @@ func (p *Plugin) advanceRecurring(msg *ScheduledMessage, sentIdx int) {
 	next, err := nextOccurrence(time.UnixMilli(msg.SendAt), msg.Repeat, msg.Timezone)
 	if err != nil {
 		// Bad recurrence (shouldn't happen — validated at create time) — log & delete.
-		p.logError("scheduler: invalid recurrence, dropping", "id", msg.ID, "err", err.Error())
+		p.logError("планировщик: некорректный повтор, сообщение удаляется", "id", msg.ID, "err", err.Error())
 		_ = deleteMessage(p.kv, msg.UserID, msg.ID)
 		return
 	}
@@ -211,14 +242,14 @@ func (p *Plugin) advanceRecurring(msg *ScheduledMessage, sentIdx int) {
 		msg.Attempts = 0
 		msg.LastError = ""
 		msg.FireAt = 0
-		p.persistAdvanced(msg, "scheduler: failed to mark series completed")
+		p.persistAdvanced(msg, "планировщик: не удалось отметить серию как завершённую")
 		return
 	}
 	msg.SendAt = next.UnixMilli()
 	msg.FireAt = randomFireAt(msg.SendAt, msg.WindowMs)
 	msg.Attempts = 0
 	msg.LastError = ""
-	p.persistAdvanced(msg, "scheduler: failed to roll forward recurring message")
+	p.persistAdvanced(msg, "планировщик: не удалось сдвинуть повторяющееся сообщение")
 }
 
 // persistAdvanced writes a record whose SendAt or status was already moved in
@@ -256,11 +287,11 @@ func joinFailures(failures []postFailure) string {
 // skipFailedOccurrence advances a recurring message past an occurrence that
 // hit max attempts. The occurrence count is *not* incremented (it didn't send).
 func (p *Plugin) skipFailedOccurrence(msg *ScheduledMessage, lastErr string) {
-	p.logError("scheduler: skipping failed recurring occurrence",
+	p.logError("планировщик: пропуск неудачного повторения",
 		"id", msg.ID, "attempts", msg.Attempts, "err", lastErr)
 	next, err := nextOccurrence(time.UnixMilli(msg.SendAt), msg.Repeat, msg.Timezone)
 	if err != nil {
-		p.logError("scheduler: invalid recurrence on skip, dropping", "id", msg.ID, "err", err.Error())
+		p.logError("планировщик: некорректный повтор при пропуске, сообщение удаляется", "id", msg.ID, "err", err.Error())
 		_ = deleteMessage(p.kv, msg.UserID, msg.ID)
 		return
 	}
@@ -268,16 +299,16 @@ func (p *Plugin) skipFailedOccurrence(msg *ScheduledMessage, lastErr string) {
 		msg.Status = StatusCompleted
 		msg.FireAt = 0
 		if err := saveMessage(p.kv, msg); err != nil {
-			p.logError("scheduler: failed to complete after skip", "id", msg.ID, "err", err.Error())
+			p.logError("планировщик: не удалось завершить после пропуска", "id", msg.ID, "err", err.Error())
 		}
 		return
 	}
 	msg.SendAt = next.UnixMilli()
 	msg.FireAt = randomFireAt(msg.SendAt, msg.WindowMs)
 	msg.Attempts = 0
-	msg.LastError = "skipped: " + lastErr
+	msg.LastError = "пропущено: " + lastErr
 	if err := saveMessage(p.kv, msg); err != nil {
-		p.logError("scheduler: failed to skip occurrence", "id", msg.ID, "err", err.Error())
+		p.logError("планировщик: не удалось пропустить повторение", "id", msg.ID, "err", err.Error())
 	}
 }
 

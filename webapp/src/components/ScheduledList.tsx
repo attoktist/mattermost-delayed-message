@@ -6,70 +6,83 @@ import {emitScheduledChanged} from '../events';
 import {closeScheduledList, openScheduleModal, openScheduleModalForEdit, selectPluginState} from '../redux';
 import type {ScheduledMessage} from '../types';
 
-// localeForTimezone picks an English locale that knows the IANA abbreviation
-// (e.g. "AEST", "EST") for the given timezone, instead of falling back to
-// offset form ("GMT+10"). The browser's own locale is unreliable — an Australian
-// user on en-US Chrome would otherwise see "GMT+10" instead of "AEST".
-const localeForTimezone = (tz: string): string => {
-    if (tz.startsWith('Australia/')) {
-        return 'en-AU';
+const repeatLabel = (repeat: string): string => {
+    switch (repeat) {
+    case 'daily':
+        return 'каждый день';
+    case 'weekdays':
+        return 'по будням';
+    case 'weekly':
+        return 'каждую неделю';
+    case 'fortnightly':
+        return 'раз в две недели';
+    case 'monthly':
+        return 'каждый месяц';
+    case 'yearly':
+        return 'каждый год';
+    default:
+        return repeat;
     }
-    if (tz.startsWith('Pacific/')) {
-        return 'en-NZ';
-    }
-    if (tz.startsWith('America/')) {
-        return 'en-US';
-    }
-    if (tz.startsWith('Europe/')) {
-        return 'en-GB';
-    }
-    return 'en';
 };
 
-// formatLocal renders a UTC ms timestamp in the supplied IANA timezone using
-// the same shape as the Go server's formatSendAt: "Thu 30 Apr 2026 at 11:45 AM AEST".
+const statusLabel = (status: string): string => {
+    switch (status) {
+    case 'pending':
+        return 'ожидает';
+    case 'sent':
+        return 'отправлено';
+    case 'failed':
+        return 'ошибка';
+    case 'completed':
+        return 'завершено';
+    default:
+        return status;
+    }
+};
+
 const formatLocal = (ms: number, tz: string): string => {
-    const parts = new Intl.DateTimeFormat(localeForTimezone(tz), {
+    const parts = new Intl.DateTimeFormat('ru', {
         weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-        hour: 'numeric', minute: '2-digit', hour12: true,
+        hour: '2-digit', minute: '2-digit', hour12: false,
         timeZone: tz,
         timeZoneName: 'short',
     }).formatToParts(new Date(ms));
     const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-    return `${get('weekday')} ${get('day')} ${get('month')} ${get('year')} at ${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()} ${get('timeZoneName')}`;
+    return `${get('weekday')} ${get('day')} ${get('month')} ${get('year')}, ${get('hour')}:${get('minute')} ${get('timeZoneName')}`;
 };
 
-// formatTimeOfDay renders just the clock portion ("11:45 AM") in the given tz.
 const formatTimeOfDay = (ms: number, tz: string): string => {
-    const parts = new Intl.DateTimeFormat(localeForTimezone(tz), {
-        hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz,
+    const parts = new Intl.DateTimeFormat('ru', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz,
     }).formatToParts(new Date(ms));
     const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-    return `${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`;
+    return `${get('hour')}:${get('minute')}`;
 };
 
-// formatWhen shows either a single instant or a randomised window for the When column.
 const formatWhen = (m: ScheduledMessage, tz: string): string => {
+    if (m.trigger === 'online') {
+        return 'Когда будет в сети';
+    }
     const base = formatLocal(m.send_at, tz);
     if (!m.window_ms || m.window_ms <= 0) {
         return base;
     }
-    return `${base} – ${formatTimeOfDay(m.send_at + m.window_ms, tz)} (random)`;
+    return `${base} – ${formatTimeOfDay(m.send_at + m.window_ms, tz)} (случайно)`;
 };
 
-// describeRepeat returns the short summary shown in the Repeat column.
 const describeRepeat = (m: ScheduledMessage, tz: string): string => {
     if (!m.repeat) {
         return '—';
     }
+    const label = repeatLabel(m.repeat);
     if (m.ends_mode === 'on' && m.ends_at) {
-        return `${m.repeat} until ${formatLocal(m.ends_at, tz)}`;
+        return `${label} до ${formatLocal(m.ends_at, tz)}`;
     }
     if (m.ends_mode === 'after' && m.ends_after) {
         const left = Math.max(0, m.ends_after - (m.occurrences ?? 0));
-        return `${m.repeat} · ${left} left`;
+        return `${label} · осталось ${left}`;
     }
-    return m.repeat;
+    return label;
 };
 
 // resolveUserTimezone reads the user's Mattermost-configured timezone from
@@ -117,7 +130,7 @@ const ScheduledList: React.FC = () => {
             data.sort((a, b) => a.send_at - b.send_at);
             setItems(data);
         } catch (e: any) {
-            setError(e?.message ?? 'Failed to load');
+            setError(e?.message ?? 'Не удалось загрузить');
         } finally {
             setLoading(false);
         }
@@ -139,7 +152,7 @@ const ScheduledList: React.FC = () => {
             setItems((prev) => prev.filter((i) => i.id !== id));
             emitScheduledChanged();
         } catch (e: any) {
-            setError(e?.message ?? 'Cancel failed');
+            setError(e?.message ?? 'Не удалось отменить');
         }
     };
 
@@ -183,9 +196,9 @@ const ScheduledList: React.FC = () => {
             );
         }
         return (
-            <span title={labels.join(', ')}>
+                <span title={labels.join(', ')}>
                 {labels[0]}
-                <span style={moreTargetsStyle}>{` +${labels.length - 1} more`}</span>
+                <span style={moreTargetsStyle}>{` +${labels.length - 1} ещё`}</span>
             </span>
         );
     };
@@ -204,7 +217,7 @@ const ScheduledList: React.FC = () => {
                 onClick={(e) => e.stopPropagation()}
             >
                 <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8}}>
-                    <h3 style={{margin: 0}}>{'Scheduled messages'}</h3>
+                    <h3 style={{margin: 0}}>{'Отложенные сообщения'}</h3>
                     <div style={{display: 'flex', gap: 8}}>
                         <button
                             type='button'
@@ -214,7 +227,7 @@ const ScheduledList: React.FC = () => {
                                 dispatch(openScheduleModal(''));
                             }}
                         >
-                            {'New scheduled message'}
+                            {'Новое отложенное сообщение'}
                         </button>
                         <button
                             type='button'
@@ -222,7 +235,7 @@ const ScheduledList: React.FC = () => {
                             onClick={reload}
                             disabled={loading}
                         >
-                            {loading ? 'Loading…' : 'Refresh'}
+                            {loading ? 'Загрузка…' : 'Обновить'}
                         </button>
                     </div>
                 </div>
@@ -230,18 +243,18 @@ const ScheduledList: React.FC = () => {
                 {error && <div style={errorStyle}>{error}</div>}
 
                 {!loading && items.length === 0 && (
-                    <div style={emptyStyle}>{'No pending scheduled messages.'}</div>
+                    <div style={emptyStyle}>{'Нет ожидающих отложенных сообщений.'}</div>
                 )}
 
                 {items.length > 0 && (
                     <table style={tableStyle}>
                         <thead>
                             <tr>
-                                <th style={thStyle}>{'When'}</th>
-                                <th style={thStyle}>{'Channel'}</th>
-                                <th style={thStyle}>{'Repeat'}</th>
-                                <th style={thStyle}>{'Message'}</th>
-                                <th style={thStyle}>{'Status'}</th>
+                                <th style={thStyle}>{'Когда'}</th>
+                                <th style={thStyle}>{'Канал'}</th>
+                                <th style={thStyle}>{'Повтор'}</th>
+                                <th style={thStyle}>{'Сообщение'}</th>
+                                <th style={thStyle}>{'Статус'}</th>
                                 <th style={thStyle}/>
                             </tr>
                         </thead>
@@ -258,11 +271,11 @@ const ScheduledList: React.FC = () => {
                                             {m.message.length > 80 ? m.message.slice(0, 80) + '…' : m.message}
                                             {m.messages && m.messages.length >= 2 && (
                                                 <div style={rotationHintStyle}>
-                                                    {`+ ${m.messages.length - 1} more (rotating)`}
+                                                    {`+ ${m.messages.length - 1} ещё (по очереди)`}
                                                 </div>
                                             )}
                                         </td>
-                                        <td style={tdStyle}>{m.status}</td>
+                                        <td style={tdStyle}>{statusLabel(m.status)}</td>
                                         <td style={tdStyle}>
                                             {!completed && (
                                                 <div style={{display: 'flex', gap: 6}}>
@@ -274,14 +287,14 @@ const ScheduledList: React.FC = () => {
                                                             dispatch(openScheduleModalForEdit(m));
                                                         }}
                                                     >
-                                                        {'Edit'}
+                                                        {'Изменить'}
                                                     </button>
                                                     <button
                                                         type='button'
                                                         className='btn btn-tertiary'
                                                         onClick={() => onCancel(m.id)}
                                                     >
-                                                        {'Cancel'}
+                                                        {'Отменить'}
                                                     </button>
                                                 </div>
                                             )}
@@ -299,7 +312,7 @@ const ScheduledList: React.FC = () => {
                         className='btn btn-primary'
                         onClick={onClose}
                     >
-                        {'Close'}
+                        {'Закрыть'}
                     </button>
                 </div>
             </div>

@@ -24,22 +24,22 @@ func (p *Plugin) scheduleCommand() *model.Command {
 	cmd := &model.Command{
 		Trigger:          commandTrigger,
 		AutoComplete:     true,
-		AutoCompleteDesc: "Schedule a message to be sent later",
-		AutoCompleteHint: `"message" "YYYY-MM-DD HH:MM" [timezone]`,
+		AutoCompleteDesc: "Отложить сообщение",
+		AutoCompleteHint: `"текст" "ГГГГ-ММ-ДД ЧЧ:ММ" [часовой_пояс]`,
 		DisplayName:      "Schedule",
-		Description:      "Schedule messages to be sent at a future time",
+		Description:      "Отложить сообщение на будущее время.",
 	}
 
-	ac := model.NewAutocompleteData(commandTrigger, `"message" "YYYY-MM-DD HH:MM" [timezone]`, "Schedule a message to be sent later")
+	ac := model.NewAutocompleteData(commandTrigger, `"текст" "ГГГГ-ММ-ДД ЧЧ:ММ" [часовой_пояс]`, "Отложить сообщение")
 
-	list := model.NewAutocompleteData("list", "", "List your pending scheduled messages")
+	list := model.NewAutocompleteData("list", "", "Список ожидающих отложенных сообщений")
 	ac.AddCommand(list)
 
-	cancel := model.NewAutocompleteData("cancel", "<id>", "Cancel a pending scheduled message")
-	cancel.AddTextArgument("ID of the scheduled message to cancel", "<id>", "")
+	cancel := model.NewAutocompleteData("cancel", "<id>", "Отменить ожидающее отложенное сообщение")
+	cancel.AddTextArgument("ID отложенного сообщения", "<id>", "")
 	ac.AddCommand(cancel)
 
-	help := model.NewAutocompleteData("help", "", "Show usage")
+	help := model.NewAutocompleteData("help", "", "Показать справку")
 	ac.AddCommand(help)
 
 	cmd.AutocompleteData = ac
@@ -61,7 +61,7 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		return p.handleListCommand(args)
 	case "cancel":
 		if len(tokens) < 2 {
-			return ephemeral("Usage: `/schedule cancel <id>`"), nil
+			return ephemeral("Использование: `/schedule cancel <id>`"), nil
 		}
 		return p.handleCancelCommand(args, tokens[1])
 	default:
@@ -71,7 +71,7 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 
 func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (*model.CommandResponse, *model.AppError) {
 	if len(tokens) < 2 {
-		return ephemeral("Usage: `/schedule \"message\" \"YYYY-MM-DD HH:MM\" [timezone] [repeat=...] [count=N|until=YYYY-MM-DD]`"), nil
+		return ephemeral("Использование: `/schedule \"текст\" \"ГГГГ-ММ-ДД ЧЧ:ММ\" [часовой_пояс] [repeat=...] [count=N|until=ГГГГ-ММ-ДД]`"), nil
 	}
 
 	message := tokens[0]
@@ -91,7 +91,7 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 	for _, tok := range tokens[startFlags:] {
 		key, val, ok := strings.Cut(tok, "=")
 		if !ok {
-			return ephemeral("Unexpected argument: `" + tok + "`. Expected `key=value` (repeat, until, count)."), nil
+			return ephemeral("Неожиданный аргумент: `" + tok + "`. Ожидается `key=value` (repeat, until, count)."), nil
 		}
 		switch strings.ToLower(key) {
 		case "repeat":
@@ -101,11 +101,11 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 		case "count":
 			n, err := strconv.Atoi(val)
 			if err != nil || n < 1 {
-				return ephemeral("`count=` must be a positive integer."), nil
+				return ephemeral("`count=` должно быть целым числом больше нуля."), nil
 			}
 			count = n
 		default:
-			return ephemeral("Unknown flag: `" + key + "`."), nil
+			return ephemeral("Неизвестный флаг: `" + key + "`."), nil
 		}
 	}
 
@@ -114,12 +114,12 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 	}
 
 	if strings.TrimSpace(message) == "" {
-		return ephemeral("Message cannot be empty."), nil
+		return ephemeral("Текст сообщения пуст."), nil
 	}
 
 	sendAt, err := parseScheduleTime(timeStr, tz)
 	if err != nil {
-		return ephemeral("Could not parse time: " + err.Error()), nil
+		return ephemeral("Не удалось разобрать время: " + err.Error()), nil
 	}
 	if err := validateSendAt(sendAt, scheduleNow().UTC()); err != nil {
 		return ephemeral(err.Error()), nil
@@ -128,7 +128,7 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 	endsMode := ""
 	switch {
 	case until != "" && count != 0:
-		return ephemeral("Specify either `until=` or `count=`, not both."), nil
+		return ephemeral("Укажите либо `until=`, либо `count=`, но не оба."), nil
 	case until != "":
 		endsMode = EndsOn
 	case count != 0:
@@ -139,18 +139,18 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 	}
 
 	if err := checkCanPost(p.gate, args.UserId, args.ChannelId); err != nil {
-		return ephemeral("You cannot post in this channel."), nil
+		return ephemeral("В этот канал писать нельзя."), nil
 	}
 	pending, err := listMessagesForUser(p.kv, args.UserId)
 	if err != nil {
-		p.logAPIError("failed to list scheduled messages", err)
-		return ephemeral("Failed to load scheduled messages."), nil
+		p.logAPIError("не удалось загрузить список отложенных сообщений", err)
+		return ephemeral("Не удалось загрузить отложенные сообщения."), nil
 	}
 	if len(pending) >= maxPendingPerUser {
-		return ephemeral(fmt.Sprintf("You have reached the limit of %d scheduled messages.", maxPendingPerUser)), nil
+		return ephemeral(fmt.Sprintf("Достигнут лимит: %d отложенных сообщений.", maxPendingPerUser)), nil
 	}
 	if utf8.RuneCountInString(message) > maxPostSize(p.gate) {
-		return ephemeral("Message exceeds maximum length."), nil
+		return ephemeral("Сообщение длиннее допустимого."), nil
 	}
 
 	msg := &ScheduledMessage{
@@ -170,7 +170,7 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 		case EndsOn:
 			endsAt, err := parseScheduleTime(until+" 23:59", tz)
 			if err != nil {
-				return ephemeral("Could not parse `until` date: " + err.Error()), nil
+				return ephemeral("Не удалось разобрать дату `until`: " + err.Error()), nil
 			}
 			msg.EndsAt = endsAt.UnixMilli()
 		case EndsAfter:
@@ -178,11 +178,11 @@ func (p *Plugin) handleCreateCommand(args *model.CommandArgs, tokens []string) (
 		}
 	}
 	if err := saveMessage(p.kv, msg); err != nil {
-		p.logAPIError("failed to save scheduled message", err)
-		return ephemeral("Failed to save scheduled message."), nil
+		p.logKVSaveError(err)
+		return ephemeral("Не удалось сохранить отложенное сообщение."), nil
 	}
 
-	return ephemeral(fmt.Sprintf("Scheduled message `%s` — first send %s%s.",
+	return ephemeral(fmt.Sprintf("Отложенное сообщение `%s` — первая отправка %s%s.",
 		msg.ID, formatSendAt(msg.SendAt, tz), repeatSuffix(msg))), nil
 }
 
@@ -192,12 +192,12 @@ func repeatSuffix(msg *ScheduledMessage) string {
 	if msg.Repeat == "" {
 		return ""
 	}
-	parts := []string{"repeats " + msg.Repeat}
+	parts := []string{"повтор " + msg.Repeat}
 	switch msg.EndsMode {
 	case EndsOn:
-		parts = append(parts, "until "+formatSendAt(msg.EndsAt, msg.Timezone))
+		parts = append(parts, "до "+formatSendAt(msg.EndsAt, msg.Timezone))
 	case EndsAfter:
-		parts = append(parts, fmt.Sprintf("for %d occurrences", msg.EndsAfter))
+		parts = append(parts, fmt.Sprintf("ещё %d раз", msg.EndsAfter))
 	}
 	return " (" + strings.Join(parts, ", ") + ")"
 }
@@ -205,18 +205,18 @@ func repeatSuffix(msg *ScheduledMessage) string {
 func (p *Plugin) handleListCommand(args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
 	msgs, err := listMessagesForUser(p.kv, args.UserId)
 	if err != nil {
-		p.logAPIError("failed to list scheduled messages", err)
-		return ephemeral("Failed to load scheduled messages."), nil
+		p.logAPIError("не удалось загрузить список отложенных сообщений", err)
+		return ephemeral("Не удалось загрузить отложенные сообщения."), nil
 	}
 	if len(msgs) == 0 {
-		return ephemeral("You have no pending scheduled messages."), nil
+		return ephemeral("Нет ожидающих отложенных сообщений."), nil
 	}
 
 	sort.Slice(msgs, func(i, j int) bool { return msgs[i].SendAt < msgs[j].SendAt })
 
 	defaultTz := p.userOrDefaultTimezone(args.UserId)
 	var sb strings.Builder
-	sb.WriteString("**Your scheduled messages**\n\n| ID | When | Repeat | Status | Message |\n|---|---|---|---|---|\n")
+	sb.WriteString("**Ваши отложенные сообщения**\n\n| ID | Когда | Повтор | Статус | Текст |\n|---|---|---|---|---|\n")
 	for _, m := range msgs {
 		tz := m.Timezone
 		if tz == "" {
@@ -226,13 +226,22 @@ func (p *Plugin) handleListCommand(args *model.CommandArgs) (*model.CommandRespo
 		msg = backtickURLs(msg)
 		fmt.Fprintf(&sb, "| `%s` | %s | %s | %s | %s |\n",
 			m.ID,
-			formatSendAt(m.SendAt, tz),
+			listWhen(m, tz),
 			repeatSummary(m),
 			m.Status,
 			truncate(msg, 80),
 		)
 	}
 	return ephemeral(sb.String()), nil
+}
+
+// listWhen is the When column of /schedule list. A presence message has
+// SendAt 0 for its whole wait; formatSendAt would render the Unix epoch.
+func listWhen(msg *ScheduledMessage, tz string) string {
+	if msg.Trigger == TriggerOnline {
+		return "Когда будет в сети"
+	}
+	return formatSendAt(msg.SendAt, tz)
 }
 
 // repeatSummary renders a compact recurrence description for the list view.
@@ -243,13 +252,13 @@ func repeatSummary(msg *ScheduledMessage) string {
 	}
 	switch msg.EndsMode {
 	case EndsOn:
-		return fmt.Sprintf("%s until %s", msg.Repeat, formatSendAt(msg.EndsAt, msg.Timezone))
+		return fmt.Sprintf("%s до %s", msg.Repeat, formatSendAt(msg.EndsAt, msg.Timezone))
 	case EndsAfter:
 		left := msg.EndsAfter - msg.Occurrences
 		if left < 0 {
 			left = 0
 		}
-		return fmt.Sprintf("%s · %d left", msg.Repeat, left)
+		return fmt.Sprintf("%s · осталось %d", msg.Repeat, left)
 	}
 	return msg.Repeat
 }
@@ -257,33 +266,27 @@ func repeatSummary(msg *ScheduledMessage) string {
 func (p *Plugin) handleCancelCommand(args *model.CommandArgs, msgID string) (*model.CommandResponse, *model.AppError) {
 	existing, err := loadMessage(p.kv, args.UserId, msgID)
 	if err != nil {
-		p.logAPIError("failed to load scheduled message", err)
-		return ephemeral("Failed to cancel."), nil
+		p.logAPIError("не удалось загрузить отложенное сообщение", err)
+		return ephemeral("Не удалось отменить."), nil
 	}
 	if existing == nil {
-		return ephemeral("No scheduled message found with that id."), nil
+		return ephemeral("Сообщение не найдено."), nil
 	}
 	if err := deleteMessage(p.kv, args.UserId, msgID); err != nil {
-		p.logAPIError("failed to delete scheduled message", err)
-		return ephemeral("Failed to cancel."), nil
+		p.logAPIError("не удалось удалить отложенное сообщение", err)
+		return ephemeral("Не удалось отменить."), nil
 	}
-	return ephemeral("Cancelled scheduled message `" + msgID + "`."), nil
+	return ephemeral("Отменено отложенное сообщение `" + msgID + "`."), nil
 }
 
 func usageText() string {
 	return strings.Join([]string{
-		"**Schedule a message**",
-		"",
-		"`/schedule \"message\" \"YYYY-MM-DD HH:MM\" [timezone] [repeat=...] [count=N|until=YYYY-MM-DD]`",
-		"`/schedule list` — list your pending messages",
-		"`/schedule cancel <id>` — cancel a pending message",
-		"",
-		"Repeat values: `daily`, `weekdays`, `weekly`, `fortnightly`, `monthly`, `yearly`.",
-		"Examples:",
-		"`/schedule \"stand-up\" \"2026-04-30 09:00\" Australia/Sydney repeat=weekdays count=20`",
-		"`/schedule \"monthly invoice\" \"2026-05-01 10:00\" UTC repeat=monthly until=2026-12-31`",
-		"",
-		"Tip: click the clock icon in the channel header for a calendar UI.",
+		"Отложенные сообщения.",
+		"/schedule \"текст\" \"ГГГГ-ММ-ДД ЧЧ:ММ\" [часовой_пояс]",
+		"/schedule list",
+		"/schedule cancel <id>",
+		"Флаги: repeat:daily|weekdays|weekly|fortnightly|monthly|yearly, count:N, until:ГГГГ-ММ-ДД.",
+		"count и until вместе нельзя. Окно, несколько каналов и ротация — только через модалку.",
 	}, "\n")
 }
 

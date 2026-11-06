@@ -157,7 +157,7 @@ func TestDispatchOneShotDeleteFailureDoesNotResend(t *testing.T) {
 	saved := loadSaved(t, kv, "u1", "m1")
 	require.Equal(t, StatusSent, saved.Status)
 	require.Equal(t, int64(0), saved.FireAt)
-	require.Equal(t, "delivered; delete failed", saved.LastError)
+	require.Equal(t, "доставлено; не удалось удалить", saved.LastError)
 }
 
 func TestDispatchSeriesSaveRetryDoesNotResend(t *testing.T) {
@@ -411,7 +411,7 @@ func TestDispatchRecurringPermFailureSkipsOccurrence(t *testing.T) {
 	require.Equal(t, time.Date(2026, 5, 5, 9, 0, 0, 0, time.UTC).UnixMilli(), saved.SendAt)
 	require.Equal(t, 0, saved.Attempts)
 	require.Equal(t, 0, saved.Occurrences)
-	require.Contains(t, saved.LastError, "skipped: ")
+	require.Contains(t, saved.LastError, "пропущено: ")
 }
 
 func TestDispatchPicksRotatingMessage(t *testing.T) {
@@ -619,3 +619,98 @@ func stopWithin(p *Plugin, d time.Duration) error {
 }
 
 var errStopTimeout = errors.New("OnDeactivate did not return")
+
+type fakeStatus struct {
+	status *model.Status
+	err    *model.AppError
+}
+
+func (f *fakeStatus) GetUserStatus(string) (*model.Status, *model.AppError) {
+	return f.status, f.err
+}
+
+func presencePending(id, peer, message string, createdAt int64) *ScheduledMessage {
+	return &ScheduledMessage{
+		ID:         id,
+		UserID:     "u1",
+		ChannelIDs: []string{validChannelID},
+		Message:    message,
+		PeerID:     peer,
+		Trigger:    TriggerOnline,
+		SendAt:     0,
+		CreatedAt:  createdAt,
+		Status:     StatusPending,
+	}
+}
+
+func TestSendDueSkipsOfflinePresence(t *testing.T) {
+	for _, status := range []string{model.StatusAway, model.StatusOffline, model.StatusDnd} {
+		t.Run(status, func(t *testing.T) {
+			p, kv, post := schedPlugin(nil, nil)
+			p.status = &fakeStatus{status: &model.Status{Status: status}}
+			mustSave(t, kv, presencePending("m1", "peer", "hi", 1))
+
+			p.sendDueMessages()
+
+			require.Empty(t, post.snapshot())
+			saved := loadSaved(t, kv, "u1", "m1")
+			require.NotNil(t, saved)
+			require.Zero(t, saved.Attempts)
+		})
+	}
+}
+
+func TestSendDueSendsOnlinePresence(t *testing.T) {
+	p, kv, post := schedPlugin(nil, nil)
+	p.status = &fakeStatus{status: &model.Status{Status: model.StatusOnline}}
+	mustSave(t, kv, presencePending("m1", "peer", "hi", 1))
+
+	p.sendDueMessages()
+
+	posts := post.snapshot()
+	require.Len(t, posts, 1)
+	require.Equal(t, validChannelID, posts[0].ChannelId)
+	require.Equal(t, "u1", posts[0].UserId)
+	require.Equal(t, "hi", posts[0].Message)
+	require.Nil(t, loadSaved(t, kv, "u1", "m1"))
+}
+
+func TestSendDueSendsSeveralPresenceInCreatedOrder(t *testing.T) {
+	p, kv, post := schedPlugin(nil, nil)
+	p.status = &fakeStatus{status: &model.Status{Status: model.StatusOnline}}
+	// Key order is alphabetical. CreatedAt is the opposite, so a missing sort posts "second" first.
+	mustSave(t, kv, presencePending("a_early", "peer", "second", 2))
+	mustSave(t, kv, presencePending("b_late", "peer", "first", 1))
+
+	p.sendDueMessages()
+
+	posts := post.snapshot()
+	require.Len(t, posts, 2)
+	require.Equal(t, "first", posts[0].Message)
+	require.Equal(t, "second", posts[1].Message)
+}
+
+func TestPresenceStatusErrorKeepsRecord(t *testing.T) {
+	p, kv, post := schedPlugin(nil, nil)
+	p.status = &fakeStatus{err: model.NewAppError("GetUserStatus", "status.down", nil, "status down", 500)}
+	mustSave(t, kv, presencePending("m1", "peer", "hi", 1))
+
+	p.sendDueMessages()
+
+	require.Empty(t, post.snapshot())
+	saved := loadSaved(t, kv, "u1", "m1")
+	require.NotNil(t, saved)
+	require.Zero(t, saved.Attempts)
+}
+
+func TestPresenceDeletesWhenPeerGone(t *testing.T) {
+	p, kv, post := schedPlugin(&schedGate{
+		userErr: model.NewAppError("GetUser", "missing", nil, "", 404),
+	}, nil)
+	mustSave(t, kv, presencePending("m1", "peer", "hi", 1))
+
+	p.sendDueMessages()
+
+	require.Empty(t, post.snapshot())
+	require.Nil(t, loadSaved(t, kv, "u1", "m1"))
+}

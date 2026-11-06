@@ -38,7 +38,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	rawTZ := cfg.DefaultTimezone
 	normalized := normalizeConfiguration(cfg)
 	if normalized.DefaultTimezone != rawTZ {
-		p.API.LogWarn("DefaultTimezone replaced with UTC", "timezone", rawTZ)
+		p.API.LogWarn("часовой пояс по умолчанию заменён на UTC", "timezone", rawTZ)
 	}
 	p.setConfiguration(normalized)
 	return nil

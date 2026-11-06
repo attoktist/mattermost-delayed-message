@@ -199,7 +199,7 @@ func TestListMessagesForUserSkipsCorruptValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "ok", msgs[0].Message)
-	assert.Equal(t, []string{"failed to unmarshal scheduled message"}, api.warns)
+	assert.Equal(t, []string{"не удалось разобрать отложенное сообщение"}, api.warns)
 }
 
 func TestTargetsPrefersChannelIDs(t *testing.T) {

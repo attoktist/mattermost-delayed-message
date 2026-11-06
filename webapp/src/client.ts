@@ -11,7 +11,7 @@ async function request<T>(
     path: string,
     init: RequestInit = {},
     parseJson = true,
-): Promise<T> {
+): Promise<{status: number; data: T}> {
     const headers = new Headers(init.headers);
     headers.set('X-Requested-With', 'XMLHttpRequest');
     if (init.method && init.method !== 'GET') {
@@ -33,28 +33,54 @@ async function request<T>(
     }
 
     if (!parseJson || res.status === 204) {
-        return undefined as unknown as T;
+        return {status: res.status, data: undefined as unknown as T};
     }
-    return res.json() as Promise<T>;
+    return {status: res.status, data: await res.json() as T};
 }
 
-export const fetchScheduled = (): Promise<ScheduledMessage[]> =>
-    request<ScheduledMessage[]>('/list', {method: 'GET'});
+export const fetchScheduled = async (): Promise<ScheduledMessage[]> =>
+    (await request<ScheduledMessage[]>('/list', {method: 'GET'})).data;
 
-export const createScheduled = (payload: CreatePayload): Promise<ScheduledMessage> =>
-    request<ScheduledMessage>('/create', {
+export const fetchScheduledForChannel = async (channelId: string): Promise<ScheduledMessage[]> =>
+    (await request<ScheduledMessage[]>(`/list?channel_id=${encodeURIComponent(channelId)}`, {method: 'GET'})).data;
+
+export const createScheduled = async (payload: CreatePayload): Promise<ScheduledMessage> =>
+    (await request<ScheduledMessage>('/create', {
         method: 'POST',
         body: JSON.stringify(payload),
-    });
+    })).data;
 
-export const updateScheduled = (payload: UpdatePayload): Promise<ScheduledMessage> =>
-    request<ScheduledMessage>('/update', {
+// Online create must not send send_at or peer_id. Draft clears only on 201.
+export const createWhenOnline = async (channelId: string, message: string): Promise<void> => {
+    const {status} = await request<ScheduledMessage>('/create', {
+        method: 'POST',
+        body: JSON.stringify({
+            trigger: 'online',
+            channel_ids: [channelId],
+            message,
+        }),
+    });
+    if (status !== 201) {
+        throw new Error('не удалось отложить');
+    }
+};
+
+export const updateScheduled = async (payload: UpdatePayload): Promise<ScheduledMessage> =>
+    (await request<ScheduledMessage>('/update', {
         method: 'PATCH',
         body: JSON.stringify(payload),
-    });
+    })).data;
 
-export const cancelScheduled = (id: string): Promise<void> =>
-    request<void>('/cancel', {
+export const sendScheduledNow = async (id: string): Promise<void> => {
+    await request<void>('/send', {
+        method: 'POST',
+        body: JSON.stringify({id}),
+    }, false);
+};
+
+export const cancelScheduled = async (id: string): Promise<void> => {
+    await request<void>('/cancel', {
         method: 'DELETE',
         body: JSON.stringify({id}),
     }, false);
+};

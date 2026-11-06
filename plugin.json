@@ -1,8 +1,8 @@
 {
   "id": "com.attoktist.scheduled-posts",
   "name": "Delayed Messages",
-  "description": "Schedule messages to be sent later. No license required.",
-  "version": "1.0.0",
+  "description": "Отложенные сообщения без лицензии Professional.",
+  "version": "1.1.0",
   "min_server_version": "12.0.0",
   "server": {
     "executables": {
@@ -22,23 +22,23 @@
     "settings": [
       {
         "key": "PollIntervalSeconds",
-        "display_name": "Poll interval (seconds)",
+        "display_name": "Интервал опроса (секунды)",
         "type": "number",
-        "help_text": "How often the scheduler checks for due messages.",
+        "help_text": "Как часто проверять, пора ли отправить отложенные. Минимум 5.",
         "default": 30
       },
       {
         "key": "MaxAttempts",
-        "display_name": "Max send attempts",
+        "display_name": "Число попыток",
         "type": "number",
-        "help_text": "Retries before marking a message as failed.",
+        "help_text": "Сколько раз повторять отправку, если все каналы отказали. От 1 до 10.",
         "default": 3
       },
       {
         "key": "DefaultTimezone",
-        "display_name": "Default timezone",
+        "display_name": "Часовой пояс по умолчанию",
         "type": "text",
-        "help_text": "IANA timezone when the user has none configured.",
+        "help_text": "IANA-имя, например Europe/Moscow. Пустое или неверное значение заменяется на UTC.",
         "default": "UTC"
       }
     ]

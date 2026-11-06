@@ -107,11 +107,11 @@ func TestValidateExtrasRejectsBadInputs(t *testing.T) {
 		msgs    []string
 		wantErr string
 	}{
-		{"negative window", "daily", -1, nil, "window_ms"},
-		{"window too large", "daily", maxWindowMs + 1, nil, "24h"},
-		{"messages without repeat", "", 0, []string{"a", "b"}, "repeating schedule"},
-		{"single-entry messages", "daily", 0, []string{"a"}, "at least 2"},
-		{"empty message in list", "daily", 0, []string{"a", "   "}, "is empty"},
+		{"negative window", "daily", -1, nil, "окно"},
+		{"window too large", "daily", maxWindowMs + 1, nil, "мс"},
+		{"messages without repeat", "", 0, []string{"a", "b"}, "несколько текстов"},
+		{"single-entry messages", "daily", 0, []string{"a"}, "минимум 2"},
+		{"empty message in list", "daily", 0, []string{"a", "   "}, "пуст"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

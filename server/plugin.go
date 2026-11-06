@@ -16,6 +16,7 @@ type Plugin struct {
 	gate          postGate
 	kv            kvAPI
 	post          poster
+	status        statusAPI
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -23,7 +24,7 @@ type Plugin struct {
 }
 
 func (p *Plugin) OnActivate() error {
-	p.gate, p.kv, p.post = p.API, p.API, p.API
+	p.gate, p.kv, p.post, p.status = p.API, p.API, p.API, p.API
 	if err := p.API.RegisterCommand(p.scheduleCommand()); err != nil {
 		return err
 	}

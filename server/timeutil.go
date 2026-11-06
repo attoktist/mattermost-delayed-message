@@ -17,14 +17,14 @@ const minLeadTime = 30 * time.Second
 func parseScheduleTime(timeStr, tz string) (time.Time, error) {
 	timeStr = strings.TrimSpace(timeStr)
 	if timeStr == "" {
-		return time.Time{}, errors.New("send time is required")
+		return time.Time{}, errors.New("укажите время отправки")
 	}
 
 	loc := time.UTC
 	if tz != "" {
 		l, err := time.LoadLocation(tz)
 		if err != nil {
-			return time.Time{}, errors.Wrapf(err, "invalid timezone %q", tz)
+			return time.Time{}, errors.Wrapf(err, "некорректный часовой пояс %q", tz)
 		}
 		loc = l
 	}
@@ -41,13 +41,13 @@ func parseScheduleTime(timeStr, tz string) (time.Time, error) {
 			return t.UTC(), nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("could not parse time %q (try YYYY-MM-DD HH:MM)", timeStr)
+	return time.Time{}, fmt.Errorf("не удалось разобрать время %q (формат ГГГГ-ММ-ДД ЧЧ:ММ)", timeStr)
 }
 
 // validateSendAt ensures the send time is sufficiently in the future.
 func validateSendAt(sendAt time.Time, now time.Time) error {
 	if sendAt.Before(now.Add(minLeadTime)) {
-		return fmt.Errorf("send time must be at least %s in the future", minLeadTime)
+		return fmt.Errorf("время отправки должно быть минимум через %s", minLeadTime)
 	}
 	return nil
 }
@@ -71,7 +71,7 @@ func nextOccurrence(current time.Time, repeat, tz string) (time.Time, error) {
 	if tz != "" {
 		l, err := time.LoadLocation(tz)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("invalid timezone %q: %w", tz, err)
+			return time.Time{}, fmt.Errorf("некорректный часовой пояс %q: %w", tz, err)
 		}
 		loc = l
 	}
@@ -123,7 +123,7 @@ func nextOccurrence(current time.Time, repeat, tz string) (time.Time, error) {
 		return target.UTC(), nil
 	}
 
-	return time.Time{}, fmt.Errorf("unsupported repeat %q", repeat)
+	return time.Time{}, fmt.Errorf("неподдерживаемый повтор %q", repeat)
 }
 
 // seriesEnded reports whether a recurring message's series should stop *before*
@@ -145,11 +145,11 @@ func validateRecurrence(repeat, endsMode string, endsAfter int, hasEndsAt bool) 
 	case RepeatNone, RepeatDaily, RepeatWeekdays, RepeatWeekly, RepeatFortnightly, RepeatMonthly, RepeatYearly:
 		// ok
 	default:
-		return fmt.Errorf("invalid repeat %q", repeat)
+		return fmt.Errorf("некорректный повтор %q", repeat)
 	}
 	if repeat == RepeatNone {
 		if endsMode != "" || endsAfter != 0 || hasEndsAt {
-			return fmt.Errorf("ends_* fields require a non-empty repeat")
+			return fmt.Errorf("поля окончания требуют повтор")
 		}
 		return nil
 	}
@@ -158,14 +158,14 @@ func validateRecurrence(repeat, endsMode string, endsAfter int, hasEndsAt bool) 
 		// ok
 	case EndsOn:
 		if !hasEndsAt {
-			return fmt.Errorf("ends_on date is required when ends_mode=on")
+			return fmt.Errorf("для окончания по дате нужна дата")
 		}
 	case EndsAfter:
 		if endsAfter < 1 {
-			return fmt.Errorf("ends_after must be >= 1 when ends_mode=after")
+			return fmt.Errorf("число повторов должно быть не меньше 1")
 		}
 	default:
-		return fmt.Errorf("invalid ends_mode %q", endsMode)
+		return fmt.Errorf("некорректный режим окончания %q", endsMode)
 	}
 	return nil
 }

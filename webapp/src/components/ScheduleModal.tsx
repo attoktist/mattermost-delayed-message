@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {createScheduled, updateScheduled} from '../client';
-import {emitScheduledChanged} from '../events';
+import {consumeComposerDraft, emitScheduledChanged, releaseComposerDraft} from '../events';
 import {closeScheduleModal, selectPluginState} from '../redux';
 import type {EndsMode, RepeatKind} from '../types';
 
@@ -15,6 +15,18 @@ const browserTimezone = (): string => {
 };
 
 const pad = (n: number) => n.toString().padStart(2, '0');
+
+const pluralRu = (n: number, one: string, few: string, many: string): string => {
+    const n10 = n % 10;
+    const n100 = n % 100;
+    if (n10 === 1 && n100 !== 11) {
+        return one;
+    }
+    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) {
+        return few;
+    }
+    return many;
+};
 
 // nextHour returns YYYY-MM-DD and HH:MM strings for 1 hour from now in local time.
 const nextHour = (): {date: string; time: string} => {
@@ -72,7 +84,7 @@ type ChannelOption = {id: string; label: string; type: string};
 
 const ScheduleModal: React.FC = () => {
     const dispatch = useDispatch();
-    const {modalOpen, initialMessage, editing} = useSelector(selectPluginState);
+    const {modalOpen, initialMessage, editing, convertOnline} = useSelector(selectPluginState);
     const currentChannelId = useSelector((s: any) => s?.entities?.channels?.currentChannelId as string | undefined);
     const allChannels = useSelector((s: any) => s?.entities?.channels?.channels as Record<string, any> | undefined);
     const myMembers = useSelector((s: any) => s?.entities?.channels?.myMembers as Record<string, any> | undefined);
@@ -168,24 +180,38 @@ const ScheduleModal: React.FC = () => {
         setChannelMenuOpen(false);
         if (editing) {
             const seedTz = editing.tz || browserTimezone();
-            const {date: ed, time: et} = localPartsInTimezone(editing.send_at, seedTz);
-            const list = (editing.messages && editing.messages.length > 0) ? editing.messages : [editing.message];
-            setMessages(list);
-            setDate(ed);
-            setTime(et);
-            const windowMs = editing.window_ms ?? 0;
-            setUseRange(windowMs > 0);
-            if (windowMs > 0) {
-                const endMs = editing.send_at + windowMs;
-                setEndTime(localPartsInTimezone(endMs, seedTz).time);
+            if (editing.trigger === 'online') {
+                const seeded = nextHour();
+                setMessages([editing.message]);
+                setDate(seeded.date);
+                setTime(seeded.time);
+                setUseRange(false);
+                setEndTime(seeded.time);
+                setTz(seedTz);
+                setRepeat('');
+                setEndsMode('never');
+                setEndsOn('');
+                setEndsAfter(10);
             } else {
-                setEndTime(et);
+                const {date: ed, time: et} = localPartsInTimezone(editing.send_at, seedTz);
+                const list = (editing.messages && editing.messages.length > 0) ? editing.messages : [editing.message];
+                setMessages(list);
+                setDate(ed);
+                setTime(et);
+                const windowMs = editing.window_ms ?? 0;
+                setUseRange(windowMs > 0);
+                if (windowMs > 0) {
+                    const endMs = editing.send_at + windowMs;
+                    setEndTime(localPartsInTimezone(endMs, seedTz).time);
+                } else {
+                    setEndTime(et);
+                }
+                setTz(seedTz);
+                setRepeat(editing.repeat ?? '');
+                setEndsMode((editing.ends_mode as EndsMode) || 'never');
+                setEndsOn(editing.ends_at ? localPartsInTimezone(editing.ends_at, seedTz).date : '');
+                setEndsAfter(editing.ends_after ?? 10);
             }
-            setTz(seedTz);
-            setRepeat(editing.repeat ?? '');
-            setEndsMode((editing.ends_mode as EndsMode) || 'never');
-            setEndsOn(editing.ends_at ? localPartsInTimezone(editing.ends_at, seedTz).date : '');
-            setEndsAfter(editing.ends_after ?? 10);
         } else {
             const seeded = nextHour();
             setMessages([initialMessage ?? '']);
@@ -250,6 +276,8 @@ const ScheduleModal: React.FC = () => {
         item?.scrollIntoView({block: 'nearest'});
     }, [highlightedIndex, channelMenuOpen]);
 
+    const presenceTextOnly = Boolean(editing?.trigger === 'online' && !convertOnline);
+
     if (!modalOpen) {
         return null;
     }
@@ -275,7 +303,7 @@ const ScheduleModal: React.FC = () => {
     const formatTimeOfDay = (hhmm: string): string => {
         try {
             const local = new Date(`${date}T${hhmm}:00`);
-            return local.toLocaleString(undefined, {
+            return local.toLocaleString('ru', {
                 hour: 'numeric', minute: '2-digit', timeZone: tz,
             });
         } catch {
@@ -286,12 +314,12 @@ const ScheduleModal: React.FC = () => {
     let preview = '';
     try {
         const local = new Date(`${date}T${time}:00`);
-        const startStr = local.toLocaleString(undefined, {
+        const startStr = local.toLocaleString('ru', {
             weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
             hour: 'numeric', minute: '2-digit', timeZone: tz, timeZoneName: 'short',
         });
         if (useRange && windowMinutes > 0) {
-            preview = `${startStr} — random within ${formatTimeOfDay(time)}–${formatTimeOfDay(endTime)}`;
+            preview = `${startStr} — случайно с ${formatTimeOfDay(time)} до ${formatTimeOfDay(endTime)}`;
         } else {
             preview = startStr;
         }
@@ -299,10 +327,8 @@ const ScheduleModal: React.FC = () => {
         preview = '';
     }
 
-    // describeRepeat builds a human-readable explanation of *exactly* what the
-    // chosen recurrence will do — pulling the weekday / day-of-month / month
-    // out of the chosen send date so the user sees, e.g., "every Friday at
-    // 09:00 Australia/Sydney" rather than the bare word "weekly".
+    // describeRepeat explains the chosen recurrence from the send date:
+    // weekday, day of month, and timezone, in Russian.
     const describeRepeat = (): string => {
         if (!repeat) {
             return '';
@@ -311,55 +337,44 @@ const ScheduleModal: React.FC = () => {
         if (isNaN(local.getTime())) {
             return '';
         }
-        const weekday = new Intl.DateTimeFormat(undefined, {weekday: 'long', timeZone: tz}).format(local);
-        const monthName = new Intl.DateTimeFormat(undefined, {month: 'long', timeZone: tz}).format(local);
+        const weekday = new Intl.DateTimeFormat('ru', {weekday: 'long', timeZone: tz}).format(local);
+        const monthName = new Intl.DateTimeFormat('ru', {month: 'long', timeZone: tz}).format(local);
         const dayOfMonth = parseInt(date.split('-')[2] ?? '', 10);
-        const ordinal = (n: number): string => {
-            if (n >= 11 && n <= 13) {
-                return `${n}th`;
-            }
-            switch (n % 10) {
-            case 1: return `${n}st`;
-            case 2: return `${n}nd`;
-            case 3: return `${n}rd`;
-            default: return `${n}th`;
-            }
-        };
         const at = (useRange && windowMinutes > 0)
-            ? `between ${time} and ${endTime} ${tz}`
-            : `at ${time} ${tz}`;
+            ? `в интервале ${time}–${endTime} (${tz})`
+            : `в ${time} (${tz})`;
 
         let body: string;
         switch (repeat) {
         case 'daily':
-            body = `Sends every day ${at}.`;
+            body = `Каждый день ${at}.`;
             break;
         case 'weekdays':
-            body = `Sends every weekday (Monday through Friday) ${at}.`;
+            body = `По будням (с понедельника по пятницу) ${at}.`;
             break;
         case 'weekly':
-            body = `Sends every ${weekday} ${at}.`;
+            body = `Каждую неделю в ${weekday} ${at}.`;
             break;
         case 'fortnightly':
-            body = `Sends every other ${weekday} ${at} (once every two weeks).`;
+            body = `Раз в две недели в ${weekday} ${at}.`;
             break;
         case 'monthly':
-            body = `Sends on the ${ordinal(dayOfMonth)} of every month ${at}. Months without a ${ordinal(dayOfMonth)} fall back to the last day of the month.`;
+            body = `Каждый месяц ${dayOfMonth}-го числа ${at}. Если в месяце нет такого числа, отправка переносится на последний день.`;
             break;
         case 'yearly':
-            body = `Sends every year on ${monthName} ${dayOfMonth} ${at}.`;
+            body = `Каждый год, ${dayOfMonth} ${monthName}, ${at}.`;
             if (date.endsWith('-02-29')) {
-                body += ' Feb 29 falls back to Feb 28 in non-leap years.';
+                body += ' 29 февраля в невисокосном году переносится на 28 февраля.';
             }
             break;
         default:
-            body = `Repeats ${repeat}.`;
+            body = `Повтор: ${repeat}.`;
         }
 
         if (endsMode === 'on' && endsOn) {
-            body += ` Stops after ${endsOn}.`;
+            body += ` Остановка после ${endsOn}.`;
         } else if (endsMode === 'after' && endsAfter > 0) {
-            body += ` Stops after ${endsAfter} occurrence${endsAfter === 1 ? '' : 's'}.`;
+            body += ` Остановка после ${endsAfter}-й отправки.`;
         }
         return body;
     };
@@ -370,34 +385,56 @@ const ScheduleModal: React.FC = () => {
         setError(null);
         const trimmed = messages.map((m) => m.trim()).filter((m) => m !== '');
         if (trimmed.length === 0) {
-            setError('Please enter a message.');
+            setError('Введите текст.');
             return;
         }
         if (channelIds.length === 0) {
-            setError('Select at least one channel.');
+            setError('Выберите хотя бы один канал.');
+            return;
+        }
+
+        if (presenceTextOnly && editing) {
+            setSubmitting(true);
+            try {
+                await updateScheduled({
+                    id: editing.id,
+                    channel_ids: channelIds,
+                    message: trimmed[0],
+                    send_at: '',
+                    timezone: tz,
+                    trigger: '',
+                });
+                emitScheduledChanged();
+                releaseComposerDraft();
+                dispatch(closeScheduleModal());
+            } catch (e: any) {
+                setError(e?.message ?? 'Не удалось сохранить');
+            } finally {
+                setSubmitting(false);
+            }
             return;
         }
 
         if (repeat && endsMode === 'on' && !endsOn) {
-            setError('Pick an end date or change "Ends" to "Never" / "After".');
+            setError('Укажите дату окончания или смените «Окончание» на «Никогда» или «После N отправок».');
             return;
         }
         if (repeat && endsMode === 'after' && (!endsAfter || endsAfter < 1)) {
-            setError('Occurrence count must be at least 1.');
+            setError('Число отправок должно быть не меньше 1.');
             return;
         }
         if (useRange) {
             if (startMins == null || endMins == null) {
-                setError('Time range needs a valid start and end.');
+                setError('Укажите корректные начало и конец интервала.');
                 return;
             }
             if (endMins <= startMins) {
-                setError('Range end must be after the start time.');
+                setError('Конец интервала должен быть позже начала.');
                 return;
             }
         }
         if (trimmed.length > 1 && !repeat) {
-            setError('Multiple messages need a repeating schedule.');
+            setError('Несколько текстов можно задать только для повтора.');
             return;
         }
 
@@ -419,20 +456,32 @@ const ScheduleModal: React.FC = () => {
         setSubmitting(true);
         try {
             if (editing) {
-                await updateScheduled({...payload, id: editing.id});
+                await updateScheduled({
+                    ...payload,
+                    id: editing.id,
+                    ...(editing.trigger === 'online' ? {trigger: ''} : {}),
+                });
             } else {
                 await createScheduled(payload);
             }
             emitScheduledChanged();
+            if (editing) {
+                releaseComposerDraft();
+            } else {
+                consumeComposerDraft();
+            }
             dispatch(closeScheduleModal());
         } catch (e: any) {
-            setError(e?.message ?? 'Failed to schedule message');
+            setError(e?.message ?? 'Не удалось отложить сообщение');
         } finally {
             setSubmitting(false);
         }
     };
 
-    const onClose = () => dispatch(closeScheduleModal());
+    const onClose = () => {
+        releaseComposerDraft();
+        dispatch(closeScheduleModal());
+    };
 
     return (
         <div
@@ -445,9 +494,16 @@ const ScheduleModal: React.FC = () => {
                 style={modalStyle}
                 onClick={(e) => e.stopPropagation()}
             >
-                <h3 style={{marginTop: 0}}>{editing ? 'Edit scheduled message' : 'Schedule a message'}</h3>
+                <h3 style={{marginTop: 0}}>
+                    {editing ? (convertOnline ? 'Изменить время' : 'Изменить отложенное сообщение') : 'Отложить сообщение'}
+                </h3>
 
-                <label style={labelStyle}>{'Send to'}</label>
+                {presenceTextOnly && (
+                    <div style={previewStyle}>{'Отправится, когда собеседник будет в сети.'}</div>
+                )}
+                {!presenceTextOnly && (
+                    <>
+                <label style={labelStyle}>{'Куда отправить'}</label>
                 <div
                     ref={channelPickerRef}
                     style={{position: 'relative'}}
@@ -462,7 +518,7 @@ const ScheduleModal: React.FC = () => {
                                     {channelLabelById(id)}
                                     <button
                                         type='button'
-                                        aria-label={`Remove ${channelLabelById(id)}`}
+                                        aria-label={`Убрать ${channelLabelById(id)}`}
                                         onClick={() => toggleChannel(id)}
                                         style={chipRemoveStyle}
                                     >
@@ -476,7 +532,7 @@ const ScheduleModal: React.FC = () => {
                         ref={channelInputRef}
                         type='text'
                         value={channelQuery}
-                        placeholder={channelIds.length === 0 ? 'Type a channel name or @user' : 'Add another channel…'}
+                        placeholder={channelIds.length === 0 ? 'Канал или @пользователь' : 'Ещё канал…'}
                         role='combobox'
                         aria-expanded={channelMenuOpen}
                         aria-controls='schedule-channel-listbox'
@@ -585,17 +641,19 @@ const ScheduleModal: React.FC = () => {
                         </ul>
                     )}
                     {channelMenuOpen && filteredChannels.length === 0 && (
-                        <div style={pickerEmptyStyle}>{'No matches.'}</div>
+                        <div style={pickerEmptyStyle}>{'Ничего не найдено.'}</div>
                     )}
                 </div>
                 {channelIds.length > 0 && (
                     <div style={targetCountStyle}>
-                        {`Will be posted to ${channelIds.length} channel${channelIds.length === 1 ? '' : 's'}.`}
+                        {`Будет отправлено в ${channelIds.length} ${pluralRu(channelIds.length, 'канал', 'канала', 'каналов')}.`}
                     </div>
+                )}
+                    </>
                 )}
 
                 <label style={labelStyle}>
-                    {messages.length > 1 ? `Messages (${messages.length}, rotating)` : 'Message'}
+                    {messages.length > 1 ? `Сообщения (${messages.length}, по очереди)` : 'Сообщение'}
                 </label>
                 {messages.map((m, i) => (
                     <div
@@ -611,7 +669,7 @@ const ScheduleModal: React.FC = () => {
                             }}
                             rows={messages.length > 1 ? 2 : 4}
                             style={{...textareaStyle, flex: 1}}
-                            placeholder={i === 0 ? 'What do you want to say?' : `Message ${i + 1}`}
+                            placeholder={i === 0 ? 'Что написать?' : `Сообщение ${i + 1}`}
                             autoFocus={i === 0}
                         />
                         {messages.length > 1 && (
@@ -619,7 +677,7 @@ const ScheduleModal: React.FC = () => {
                                 type='button'
                                 onClick={() => setMessages(messages.filter((_, j) => j !== i))}
                                 style={removeButtonStyle}
-                                aria-label={`Remove message ${i + 1}`}
+                                aria-label={`Убрать сообщение ${i + 1}`}
                             >
                                 {'×'}
                             </button>
@@ -632,13 +690,15 @@ const ScheduleModal: React.FC = () => {
                         onClick={() => setMessages([...messages, ''])}
                         style={addAnotherStyle}
                     >
-                        {'+ Add another message'}
+                        {'+ Ещё сообщение'}
                     </button>
                 )}
 
+                {!presenceTextOnly && (
+                    <>
                 <div style={{display: 'flex', gap: 12, marginTop: 12}}>
                     <div style={{flex: 1}}>
-                        <label style={labelStyle}>{'Date'}</label>
+                        <label style={labelStyle}>{'Дата'}</label>
                         <input
                             type='date'
                             value={date}
@@ -648,7 +708,7 @@ const ScheduleModal: React.FC = () => {
                         />
                     </div>
                     <div style={{flex: 1}}>
-                        <label style={labelStyle}>{useRange ? 'Start time' : 'Time'}</label>
+                        <label style={labelStyle}>{useRange ? 'Начало' : 'Время'}</label>
                         <input
                             type='time'
                             value={time}
@@ -658,7 +718,7 @@ const ScheduleModal: React.FC = () => {
                     </div>
                     {useRange && (
                         <div style={{flex: 1}}>
-                            <label style={labelStyle}>{'End time'}</label>
+                            <label style={labelStyle}>{'Конец'}</label>
                             <input
                                 type='time'
                                 value={endTime}
@@ -674,10 +734,10 @@ const ScheduleModal: React.FC = () => {
                         checked={useRange}
                         onChange={(e) => setUseRange(e.target.checked)}
                     />
-                    {'Fire at a random time within a range'}
+                    {'Случайное время в интервале'}
                 </label>
 
-                <label style={labelStyle}>{'Timezone'}</label>
+                <label style={labelStyle}>{'Часовой пояс'}</label>
                 <select
                     value={tz}
                     onChange={(e) => setTz(e.target.value)}
@@ -688,33 +748,33 @@ const ScheduleModal: React.FC = () => {
                     ))}
                 </select>
 
-                <label style={labelStyle}>{'Repeat'}</label>
+                <label style={labelStyle}>{'Повтор'}</label>
                 <select
                     value={repeat}
                     onChange={(e) => setRepeat(e.target.value as RepeatKind)}
                     style={inputStyle}
                 >
-                    <option value=''>{'Does not repeat'}</option>
-                    <option value='daily'>{'Daily'}</option>
-                    <option value='weekdays'>{'Every weekday (Mon–Fri)'}</option>
-                    <option value='weekly'>{'Weekly'}</option>
-                    <option value='fortnightly'>{'Fortnightly'}</option>
-                    <option value='monthly'>{'Monthly'}</option>
-                    <option value='yearly'>{'Yearly'}</option>
+                    <option value=''>{'Без повтора'}</option>
+                    <option value='daily'>{'Каждый день'}</option>
+                    <option value='weekdays'>{'По будням (пн–пт)'}</option>
+                    <option value='weekly'>{'Каждую неделю'}</option>
+                    <option value='fortnightly'>{'Раз в две недели'}</option>
+                    <option value='monthly'>{'Каждый месяц'}</option>
+                    <option value='yearly'>{'Каждый год'}</option>
                 </select>
 
                 {repeat && (
                     <>
-                        <label style={labelStyle}>{'Ends'}</label>
+                        <label style={labelStyle}>{'Окончание'}</label>
                         <div style={{display: 'flex', gap: 12}}>
                             <select
                                 value={endsMode}
                                 onChange={(e) => setEndsMode(e.target.value as EndsMode)}
                                 style={{...inputStyle, flex: 1}}
                             >
-                                <option value='never'>{'Never'}</option>
-                                <option value='on'>{'On date'}</option>
-                                <option value='after'>{'After N occurrences'}</option>
+                                <option value='never'>{'Никогда'}</option>
+                                <option value='on'>{'В дату'}</option>
+                                <option value='after'>{'После N отправок'}</option>
                             </select>
                             {endsMode === 'on' && (
                                 <input
@@ -737,9 +797,11 @@ const ScheduleModal: React.FC = () => {
                         </div>
                     </>
                 )}
+                    </>
+                )}
 
-                {preview && <div style={previewStyle}>{`Will send: ${preview}`}</div>}
-                {repeatPreview && <div style={previewStyle}>{repeatPreview}</div>}
+                {!presenceTextOnly && preview && <div style={previewStyle}>{`Отправка: ${preview}`}</div>}
+                {!presenceTextOnly && repeatPreview && <div style={previewStyle}>{repeatPreview}</div>}
                 {error && <div style={errorStyle}>{error}</div>}
 
                 <div style={{display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18}}>
@@ -749,7 +811,7 @@ const ScheduleModal: React.FC = () => {
                         onClick={onClose}
                         disabled={submitting}
                     >
-                        {'Cancel'}
+                        {'Отмена'}
                     </button>
                     <button
                         type='button'
@@ -757,7 +819,7 @@ const ScheduleModal: React.FC = () => {
                         onClick={onSubmit}
                         disabled={submitting}
                     >
-                        {submitting ? (editing ? 'Saving…' : 'Scheduling…') : (editing ? 'Save' : 'Schedule')}
+                        {submitting ? (editing ? 'Сохранение…' : 'Откладываем…') : (editing ? 'Сохранить' : 'Отложить')}
                     </button>
                 </div>
             </div>

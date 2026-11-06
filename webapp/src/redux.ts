@@ -10,6 +10,7 @@ export type OpenScheduleModalAction = {
     type: typeof OPEN_SCHEDULE_MODAL;
     initialMessage?: string;
     editing?: ScheduledMessage;
+    convertOnline?: boolean;
 };
 export type CloseScheduleModalAction = {type: typeof CLOSE_SCHEDULE_MODAL};
 export type OpenScheduledListAction = {type: typeof OPEN_SCHEDULED_LIST};
@@ -26,6 +27,7 @@ export type PluginState = {
     listOpen: boolean;
     initialMessage: string;
     editing: ScheduledMessage | null;
+    convertOnline: boolean;
 };
 
 const initialState: PluginState = {
@@ -33,6 +35,7 @@ const initialState: PluginState = {
     listOpen: false,
     initialMessage: '',
     editing: null,
+    convertOnline: false,
 };
 
 export const reducer = (state: PluginState = initialState, action: Action): PluginState => {
@@ -43,9 +46,10 @@ export const reducer = (state: PluginState = initialState, action: Action): Plug
             modalOpen: true,
             initialMessage: action.initialMessage ?? '',
             editing: action.editing ?? null,
+            convertOnline: action.convertOnline ?? false,
         };
     case CLOSE_SCHEDULE_MODAL:
-        return {...state, modalOpen: false, initialMessage: '', editing: null};
+        return {...state, modalOpen: false, initialMessage: '', editing: null, convertOnline: false};
     case OPEN_SCHEDULED_LIST:
         return {...state, listOpen: true};
     case CLOSE_SCHEDULED_LIST:
@@ -59,9 +63,10 @@ export const openScheduleModal = (initialMessage = ''): OpenScheduleModalAction 
     type: OPEN_SCHEDULE_MODAL,
     initialMessage,
 });
-export const openScheduleModalForEdit = (msg: ScheduledMessage): OpenScheduleModalAction => ({
+export const openScheduleModalForEdit = (msg: ScheduledMessage, convertOnline = false): OpenScheduleModalAction => ({
     type: OPEN_SCHEDULE_MODAL,
     editing: msg,
+    convertOnline,
 });
 export const closeScheduleModal = (): CloseScheduleModalAction => ({type: CLOSE_SCHEDULE_MODAL});
 export const openScheduledList = (): OpenScheduledListAction => ({type: OPEN_SCHEDULED_LIST});

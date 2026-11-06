@@ -1,6 +1,6 @@
 # Отложенные сообщения для Mattermost Team Edition
 
-Плагин `com.attoktist.scheduled-posts` версии 1.0.0 принимает текст сейчас и публикует его от имени автора в заданное время. Он работает на Mattermost Team Edition 12.0.1 без лицензии.
+Плагин `com.attoktist.scheduled-posts` версии 1.1.0 принимает текст сейчас и публикует его от имени автора в заданное время. Он работает на Mattermost Team Edition 12.0.1 без лицензии.
 
 Штатные scheduled posts Mattermost требуют лицензию Professional или Enterprise. Этот плагин даёт отложенную отправку на Team Edition без такой лицензии.
 
@@ -39,7 +39,7 @@ Set-Location ..
 
 `npm run build` пишет `webapp/dist/main.js`. React в этот файл не попадает: его даёт сервер Mattermost.
 
-Архив для загрузки: `dist/com.attoktist.scheduled-posts-1.0.0.tar.gz`. Внутри один каталог `com.attoktist.scheduled-posts/` с `plugin.json`, `server/dist/` (все пять бинарников) и `webapp/dist/main.js`.
+Архив для загрузки: `dist/com.attoktist.scheduled-posts-1.1.0.tar.gz`. Внутри один каталог `com.attoktist.scheduled-posts/` с `plugin.json`, `server/dist/` (все пять бинарников) и `webapp/dist/main.js`.
 
 ```powershell
 $pluginId = "com.attoktist.scheduled-posts"
@@ -49,15 +49,21 @@ New-Item -ItemType Directory -Force -Path "$stage/server/dist", "$stage/webapp/d
 Copy-Item plugin.json "$stage/plugin.json"
 Copy-Item server/dist/plugin-linux-amd64, server/dist/plugin-linux-arm64, server/dist/plugin-darwin-amd64, server/dist/plugin-darwin-arm64, server/dist/plugin-windows-amd64.exe "$stage/server/dist"
 Copy-Item webapp/dist/main.js "$stage/webapp/dist/main.js"
-if (Test-Path "dist/$pluginId-1.0.0.tar.gz") { Remove-Item "dist/$pluginId-1.0.0.tar.gz" }
-tar -czf "dist/$pluginId-1.0.0.tar.gz" -C dist $pluginId
+if (Test-Path "dist/$pluginId-1.1.0.tar.gz") { Remove-Item "dist/$pluginId-1.1.0.tar.gz" }
+tar -czf "dist/$pluginId-1.1.0.tar.gz" -C dist $pluginId
 ```
 
 `dist/`, `server/dist/` и `webapp/dist/` перечислены в `.gitignore`. В git попадает способ сборки, не готовые бинарники.
 
 ## Установка
 
-System Console → Plugins → Plugin Management → Upload Plugin. Выберите `dist/com.attoktist.scheduled-posts-1.0.0.tar.gz`, затем включите плагин.
+System Console → Plugins → Plugin Management → Upload Plugin. Выберите `dist/com.attoktist.scheduled-posts-1.1.0.tar.gz`, затем включите плагин.
+
+## Использование
+
+В шапке канала кнопка с часами открывает ту же форму, что пункт «Отправить позже». Меню шапки и бейдж в левой панели открывают общий список ожидающих сообщений.
+
+В панели форматирования композера две кнопки: меню отложенной отправки и список отложенных сообщений текущего канала. Пункт «Когда будет в сети» есть только в личном диалоге. Панель форматирования скрывается кнопкой Aa — вместе с ней скрываются обе кнопки.
 
 ## Slash-команды
 
@@ -75,8 +81,6 @@ System Console → Plugins → Plugin Management → Upload Plugin. Выбери
 /schedule "stand-up" "2026-04-30 09:00" Australia/Sydney repeat=weekdays count=20
 /schedule "monthly invoice" "2026-05-01 10:00" UTC repeat=monthly until=2026-12-31
 ```
-
-В шапке канала есть кнопка с часами: она открывает тот же сценарий в календаре.
 
 Второй `/schedule` не зарегистрируется. Если этот триггер уже занят другим плагином, `OnActivate` вернёт ошибку `RegisterCommand`, и плагин не включится.
 

@@ -23,6 +23,7 @@ export type ScheduledMessage = {
     message_cycle?: number[];
     message_cycle_pos?: number;
     last_sent_index?: number | null;
+    trigger?: '' | 'online';
 };
 
 export type CreatePayload = {
@@ -36,6 +37,7 @@ export type CreatePayload = {
     ends_after?: number;
     window_ms?: number;
     messages?: string[];
+    trigger?: '' | 'online';
 };
 
 export type UpdatePayload = CreatePayload & {id: string};

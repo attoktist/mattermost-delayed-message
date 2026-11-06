@@ -24,21 +24,21 @@ const maxWindowMs int64 = 24 * 60 * 60 * 1000
 // Called alongside validateRecurrence by the API handlers.
 func validateExtras(repeat string, windowMs int64, messages []string) error {
 	if windowMs < 0 {
-		return errors.New("window_ms must be >= 0")
+		return errors.New("окно не может быть отрицательным")
 	}
 	if windowMs > maxWindowMs {
-		return fmt.Errorf("window_ms must be <= %d (24h)", maxWindowMs)
+		return fmt.Errorf("окно не длиннее %d мс (24 часа)", maxWindowMs)
 	}
 	if len(messages) > 0 {
 		if repeat == RepeatNone {
-			return errors.New("multiple messages require a repeating schedule")
+			return errors.New("несколько текстов только у повторяющегося сообщения")
 		}
 		if len(messages) < 2 {
-			return errors.New("provide at least 2 messages, or use the single-message field")
+			return errors.New("нужно минимум 2 текста, либо одно поле message")
 		}
 		for i, m := range messages {
 			if strings.TrimSpace(m) == "" {
-				return fmt.Errorf("message %d is empty", i+1)
+				return fmt.Errorf("текст %d пуст", i+1)
 			}
 		}
 	}

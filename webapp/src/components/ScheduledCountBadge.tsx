@@ -40,7 +40,7 @@ const ScheduledCountBadge: React.FC = () => {
                 }
                 const pending = items.filter((i) => i.status === 'pending');
                 setCount(pending.length);
-                const oneOffPending = pending.filter((p) => !p.repeat);
+                const oneOffPending = pending.filter((p) => !p.repeat && p.trigger !== 'online');
                 setSoonestSendAt(oneOffPending.length === 0 ? null : Math.min(...oneOffPending.map((p) => p.send_at)));
             } catch {
                 if (!cancelled) {
@@ -61,10 +61,12 @@ const ScheduledCountBadge: React.FC = () => {
     }, []);
 
     const hasPending = count != null && count > 0;
-    // Imminent = at least one pending one-off message scheduled within the
-    // next 24h. Recurring schedules are excluded — their next fire is almost
+    // Imminent = at least one pending one-off timed message within the next
+    // 24h. Recurring schedules are excluded — their next fire is almost
     // always <24h away, so including them would keep the menu permanently
     // bold and drown out the signal of an actual one-off about to send.
+    // Presence records (trigger "online") stay out too: send_at is 0, so they
+    // would look overdue for the whole wait. Timed messages keep the 24h rule.
     // Drives the "loud" styling: bold label, bright mention-coloured badge.
     const imminent = hasPending && soonestSendAt != null && soonestSendAt - Date.now() < IMMINENT_WINDOW_MS;
 
@@ -88,7 +90,7 @@ const ScheduledCountBadge: React.FC = () => {
                     tabIndex={0}
                     href='#'
                     onClick={onClick}
-                    title='View scheduled messages'
+                    title='Отложенные сообщения'
                     style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -125,7 +127,7 @@ const ScheduledCountBadge: React.FC = () => {
                             className='SidebarChannelLinkLabel sidebar-item__name'
                             style={{whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}
                         >
-                            {'Scheduled'}
+                            {'Отложенные'}
                         </span>
                     </div>
                     {hasPending && (

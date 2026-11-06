@@ -3,6 +3,8 @@ import React from 'react';
 import Root from './components/Root';
 import ScheduledCountBadge from './components/ScheduledCountBadge';
 import ClockIcon from './components/ClockIcon';
+import ScheduleMenuButton from './components/schedule_menu_button';
+import ScheduledListButton from './components/scheduled_list_button';
 import {openScheduleModal, openScheduledList, reducer} from './redux';
 import {PLUGIN_ID} from './types';
 
@@ -17,6 +19,7 @@ type Registry = {
     ) => string;
     registerLeftSidebarHeaderComponent?: (c: any) => void;
     registerChannelHeaderMenuAction?: (text: string, action: () => void) => string;
+    registerPostEditorActionComponent: (component: React.ComponentType<any>) => string;
 };
 
 class Plugin {
@@ -35,8 +38,8 @@ class Plugin {
             registry.registerChannelHeaderButtonAction(
                 React.createElement(ClockIcon, {size: 16}),
                 () => store.dispatch(openScheduleModal('')),
-                'Schedule a message',
-                'Schedule a message',
+                'Отложить сообщение',
+                'Отложить сообщение',
             );
         }
 
@@ -44,7 +47,7 @@ class Plugin {
         // can see/cancel scheduled messages without the left sidebar entry.
         if (registry.registerChannelHeaderMenuAction) {
             registry.registerChannelHeaderMenuAction(
-                'View scheduled messages',
+                'Отложенные сообщения',
                 () => store.dispatch(openScheduledList()),
             );
         }
@@ -53,6 +56,9 @@ class Plugin {
         if (registry.registerLeftSidebarHeaderComponent) {
             registry.registerLeftSidebarHeaderComponent(ScheduledCountBadge as any);
         }
+
+        registry.registerPostEditorActionComponent(ScheduleMenuButton);
+        registry.registerPostEditorActionComponent(ScheduledListButton);
     }
 }
 

@@ -6,6 +6,9 @@ const (
 	StatusFailed    = "failed"
 	StatusCompleted = "completed"
 
+	// TriggerOnline posts a direct message once PeerID is online. SendAt stays 0.
+	TriggerOnline = "online"
+
 	RepeatNone        = ""
 	RepeatDaily       = "daily"
 	RepeatWeekdays    = "weekdays"
@@ -58,6 +61,10 @@ type ScheduledMessage struct {
 	MessageCycle    []int    `json:"message_cycle,omitempty"`
 	MessageCyclePos int      `json:"message_cycle_pos,omitempty"`
 	LastSentIndex   *int     `json:"last_sent_index,omitempty"`
+
+	// Empty Trigger is a timed message. TriggerOnline waits on PeerID.
+	Trigger string `json:"trigger,omitempty"`
+	PeerID  string `json:"peer_id,omitempty"`
 }
 
 // Targets returns the channel IDs this message will post to. Always read
