@@ -268,7 +268,13 @@ const ScheduledList: React.FC = () => {
                                         <td style={tdStyle}>{renderTargets(m.channel_ids ?? [])}</td>
                                         <td style={tdStyle}>{describeRepeat(m, rowTz)}</td>
                                         <td style={tdStyle}>
-                                            {m.message.length > 80 ? m.message.slice(0, 80) + '…' : m.message}
+                                            {m.message.length > 80 ? m.message.slice(0, 80) + '…' : (m.message || (m.file_ids?.length ? 'Вложение' : ''))}
+                                            {m.file_ids && m.file_ids.length > 0 && (
+                                                <div style={rotationHintStyle}>{`Вложений: ${m.file_ids.length}`}</div>
+                                            )}
+                                            {m.root_id && (
+                                                <div style={rotationHintStyle}>{'Ответ в тред'}</div>
+                                            )}
                                             {m.messages && m.messages.length >= 2 && (
                                                 <div style={rotationHintStyle}>
                                                     {`+ ${m.messages.length - 1} ещё (по очереди)`}

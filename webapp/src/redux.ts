@@ -11,6 +11,10 @@ export type OpenScheduleModalAction = {
     initialMessage?: string;
     editing?: ScheduledMessage;
     convertOnline?: boolean;
+    fileIds?: string[];
+    fileNames?: string[];
+    rootId?: string;
+    channelId?: string;
 };
 export type CloseScheduleModalAction = {type: typeof CLOSE_SCHEDULE_MODAL};
 export type OpenScheduledListAction = {type: typeof OPEN_SCHEDULED_LIST};
@@ -28,6 +32,10 @@ export type PluginState = {
     initialMessage: string;
     editing: ScheduledMessage | null;
     convertOnline: boolean;
+    fileIds: string[];
+    fileNames: string[];
+    rootId: string;
+    channelId: string;
 };
 
 const initialState: PluginState = {
@@ -36,6 +44,10 @@ const initialState: PluginState = {
     initialMessage: '',
     editing: null,
     convertOnline: false,
+    fileIds: [],
+    fileNames: [],
+    rootId: '',
+    channelId: '',
 };
 
 export const reducer = (state: PluginState = initialState, action: Action): PluginState => {
@@ -47,9 +59,13 @@ export const reducer = (state: PluginState = initialState, action: Action): Plug
             initialMessage: action.initialMessage ?? '',
             editing: action.editing ?? null,
             convertOnline: action.convertOnline ?? false,
+            fileIds: action.editing ? (action.editing.file_ids ?? []) : (action.fileIds ?? []),
+            fileNames: action.editing ? [] : (action.fileNames ?? []),
+            rootId: action.editing ? (action.editing.root_id ?? '') : (action.rootId ?? ''),
+            channelId: action.editing ? '' : (action.channelId ?? ''),
         };
     case CLOSE_SCHEDULE_MODAL:
-        return {...state, modalOpen: false, initialMessage: '', editing: null, convertOnline: false};
+        return {...initialState, listOpen: state.listOpen};
     case OPEN_SCHEDULED_LIST:
         return {...state, listOpen: true};
     case CLOSE_SCHEDULED_LIST:
@@ -59,9 +75,16 @@ export const reducer = (state: PluginState = initialState, action: Action): Plug
     }
 };
 
-export const openScheduleModal = (initialMessage = ''): OpenScheduleModalAction => ({
+export const openScheduleModal = (
+    initialMessage = '',
+    draft?: {fileIds?: string[]; fileNames?: string[]; rootId?: string; channelId?: string},
+): OpenScheduleModalAction => ({
     type: OPEN_SCHEDULE_MODAL,
     initialMessage,
+    fileIds: draft?.fileIds,
+    fileNames: draft?.fileNames,
+    rootId: draft?.rootId,
+    channelId: draft?.channelId,
 });
 export const openScheduleModalForEdit = (msg: ScheduledMessage, convertOnline = false): OpenScheduleModalAction => ({
     type: OPEN_SCHEDULE_MODAL,
@@ -79,5 +102,15 @@ export const selectPluginState = (state: any): PluginState => {
         state?.[`plugins-${PLUGIN_ID}`] ??
         state?.plugins?.[PLUGIN_ID] ??
         state?.plugins?.plugins?.[PLUGIN_ID];
-    return slice ?? initialState;
+    if (!slice) {
+        return initialState;
+    }
+    return {
+        ...initialState,
+        ...slice,
+        fileIds: slice.fileIds ?? [],
+        fileNames: slice.fileNames ?? [],
+        rootId: slice.rootId ?? '',
+        channelId: slice.channelId ?? '',
+    };
 };

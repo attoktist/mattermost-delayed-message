@@ -19,6 +19,9 @@ type fakeGate struct {
 	userErr *model.AppError
 
 	config *model.Config
+
+	files map[string]*model.FileInfo
+	posts map[string]*model.Post
 }
 
 func (f *fakeGate) GetChannel(string) (*model.Channel, *model.AppError) {
@@ -40,6 +43,20 @@ func (f *fakeGate) GetUser(string) (*model.User, *model.AppError) {
 
 func (f *fakeGate) GetConfig() *model.Config {
 	return f.config
+}
+
+func (f *fakeGate) GetFileInfo(id string) (*model.FileInfo, *model.AppError) {
+	if info := f.files[id]; info != nil {
+		return info, nil
+	}
+	return nil, &model.AppError{Message: "missing file"}
+}
+
+func (f *fakeGate) GetPost(id string) (*model.Post, *model.AppError) {
+	if post := f.posts[id]; post != nil {
+		return post, nil
+	}
+	return nil, &model.AppError{Message: "missing post"}
 }
 
 var _ postGate = (*fakeGate)(nil)

@@ -11,6 +11,7 @@ const (
 	maxPendingPerUser      = 100
 	maxChannelsPerMessage  = 10
 	maxRotationMessages    = 20
+	maxFilesPerMessage     = 10
 	maxHTTPBodyBytes       = 1 << 20
 	maxConfiguredAttempts  = 10
 	minPollIntervalSeconds = 5
@@ -27,6 +28,8 @@ type postGate interface {
 	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
 	GetUser(userID string) (*model.User, *model.AppError)
 	GetConfig() *model.Config
+	GetFileInfo(fileID string) (*model.FileInfo, *model.AppError)
+	GetPost(postID string) (*model.Post, *model.AppError)
 }
 
 var _ postGate = plugin.API(nil)

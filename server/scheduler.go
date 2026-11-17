@@ -156,6 +156,12 @@ func (p *Plugin) deliver(msg *ScheduledMessage, maxAttempts int, ignoreSchedule 
 			UserId:    current.UserID,
 			Message:   body,
 		}
+		// Files and a thread root belong to one channel. A multi-channel record
+		// must not spray them: the API rejects that shape, this is the backstop.
+		if len(targets) == 1 {
+			post.RootId = current.RootID
+			post.FileIds = current.FileIDs
+		}
 		if _, appErr := p.post.CreatePost(post); appErr != nil {
 			failures = append(failures, postFailure{channelID: channelID, err: appErr.Error()})
 			continue

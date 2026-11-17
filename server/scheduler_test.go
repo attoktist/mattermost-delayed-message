@@ -74,6 +74,14 @@ func (g *schedGate) GetUser(string) (*model.User, *model.AppError) {
 
 func (g *schedGate) GetConfig() *model.Config { return nil }
 
+func (g *schedGate) GetFileInfo(string) (*model.FileInfo, *model.AppError) {
+	return nil, &model.AppError{Message: "missing file"}
+}
+
+func (g *schedGate) GetPost(string) (*model.Post, *model.AppError) {
+	return nil, &model.AppError{Message: "missing post"}
+}
+
 var (
 	_ poster   = (*fakePoster)(nil)
 	_ postGate = (*schedGate)(nil)
@@ -250,7 +258,7 @@ func TestDispatchRetriesWhenUserLookupFails(t *testing.T) {
 func TestDispatchDoesNotCopyProps(t *testing.T) {
 	p, kv, post := schedPlugin(nil, nil)
 	// Keys the scheduled-message struct does not store must not leak into Post.
-	raw := []byte(`{"id":"m1","user_id":"u1","channel_ids":["` + validChannelID + `"],"message":"hello","status":"pending","send_at":1,"props":{"from_plugin":"x"},"type":"custom","file_ids":["f1"],"pending_post_id":"pend"}`)
+	raw := []byte(`{"id":"m1","user_id":"u1","channel_ids":["` + validChannelID + `"],"message":"hello","status":"pending","send_at":1,"props":{"from_plugin":"x"},"type":"custom","pending_post_id":"pend"}`)
 	require.Nil(t, kv.KVSet(messageKey("u1", "m1"), raw))
 
 	p.dispatch(&ScheduledMessage{ID: "m1", UserID: "u1", Status: StatusPending}, 3)
@@ -266,6 +274,38 @@ func TestDispatchDoesNotCopyProps(t *testing.T) {
 	require.Empty(t, got.FileIds)
 	require.Empty(t, got.PendingPostId)
 	require.Nil(t, loadSaved(t, kv, "u1", "m1"))
+}
+
+func TestDispatchAttachesFilesAndThread(t *testing.T) {
+	p, kv, post := schedPlugin(nil, nil)
+	msg := duePending("m1", []string{validChannelID}, "hello")
+	msg.FileIDs = []string{"dddddddddddddddddddddddddd"}
+	msg.RootID = "eeeeeeeeeeeeeeeeeeeeeeeeee"
+	mustSave(t, kv, msg)
+
+	p.dispatch(msg, 3)
+
+	posts := post.snapshot()
+	require.Len(t, posts, 1)
+	require.Equal(t, model.StringArray(msg.FileIDs), posts[0].FileIds)
+	require.Equal(t, msg.RootID, posts[0].RootId)
+}
+
+func TestDispatchDoesNotSpreadFilesAcrossChannels(t *testing.T) {
+	p, kv, post := schedPlugin(nil, nil)
+	msg := duePending("m1", []string{validChannelID, otherChannelID}, "hello")
+	msg.FileIDs = []string{"dddddddddddddddddddddddddd"}
+	msg.RootID = "eeeeeeeeeeeeeeeeeeeeeeeeee"
+	mustSave(t, kv, msg)
+
+	p.dispatch(msg, 3)
+
+	posts := post.snapshot()
+	require.Len(t, posts, 2)
+	for _, got := range posts {
+		require.Empty(t, got.FileIds)
+		require.Empty(t, got.RootId)
+	}
 }
 
 func TestDispatchSkipsWhenLockUnavailable(t *testing.T) {

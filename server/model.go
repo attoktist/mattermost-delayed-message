@@ -65,6 +65,12 @@ type ScheduledMessage struct {
 	// Empty Trigger is a timed message. TriggerOnline waits on PeerID.
 	Trigger string `json:"trigger,omitempty"`
 	PeerID  string `json:"peer_id,omitempty"`
+
+	// FileIDs are already-uploaded Mattermost files. A file attaches to one
+	// post, so recurring schedules cannot carry them. RootID posts the message
+	// as a reply in that thread; empty means a channel-level post.
+	FileIDs []string `json:"file_ids,omitempty"`
+	RootID  string   `json:"root_id,omitempty"`
 }
 
 // Targets returns the channel IDs this message will post to. Always read

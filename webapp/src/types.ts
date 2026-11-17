@@ -24,6 +24,8 @@ export type ScheduledMessage = {
     message_cycle_pos?: number;
     last_sent_index?: number | null;
     trigger?: '' | 'online';
+    file_ids?: string[];
+    root_id?: string;
 };
 
 export type CreatePayload = {
@@ -38,6 +40,8 @@ export type CreatePayload = {
     window_ms?: number;
     messages?: string[];
     trigger?: '' | 'online';
+    file_ids?: string[];
+    root_id?: string;
 };
 
 export type UpdatePayload = CreatePayload & {id: string};
