@@ -2,7 +2,7 @@
   "id": "com.attoktist.scheduled-posts",
   "name": "Delayed Messages",
   "description": "Отложенные сообщения без лицензии Professional.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "min_server_version": "12.0.0",
   "server": {
     "executables": {

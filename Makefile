@@ -2,7 +2,7 @@
 .PHONY: server webapp dist test
 
 PLUGIN_ID = com.attoktist.scheduled-posts
-VERSION = 1.0.0
+VERSION = 1.2.0
 STAGE = dist/$(PLUGIN_ID)
 BUNDLE = dist/$(PLUGIN_ID)-$(VERSION).tar.gz
 
