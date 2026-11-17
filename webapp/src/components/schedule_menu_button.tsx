@@ -5,12 +5,41 @@ import {createWhenOnline} from '../client';
 import {emitScheduledChanged, handComposerDraft} from '../events';
 import {openScheduleModal} from '../redux';
 import ClockIcon from './ClockIcon';
+import {HoverTip, mountOnBody} from './overlay';
+
+type FileInfo = {id?: string; name?: string};
 
 type Draft = {
     message: string;
     channelId: string;
-    fileInfos?: readonly unknown[];
+    rootId?: string;
+    fileInfos?: readonly FileInfo[];
     uploadsInProgress?: readonly unknown[];
+};
+
+const draftFiles = (draft: Draft): {id: string; name: string}[] => {
+    const out: {id: string; name: string}[] = [];
+    for (const info of draft.fileInfos ?? []) {
+        const id = info?.id ?? '';
+        if (!id) {
+            continue;
+        }
+        out.push({id, name: info.name || id});
+    }
+    return out;
+};
+
+// ponytail: Mattermost updateText only replaces message and spreads the same draft
+// object, so files are cleared by mutating that object first.
+const clearComposer = (draft: Draft, updateText: (message: string) => void) => {
+    try {
+        const mutable = draft as unknown as {fileInfos: FileInfo[]; uploadsInProgress: unknown[]};
+        mutable.fileInfos = [];
+        mutable.uploadsInProgress = [];
+    } catch {
+        // frozen draft: the text still clears, files stay in the composer
+    }
+    updateText('');
 };
 
 type Props = {
@@ -29,6 +58,7 @@ const ScheduleMenuButton: React.FC<Props> = ({draft, updateText}) => {
     const busyRef = useRef(false);
     const [anchor, setAnchor] = useState<{left: number; top: number; downward: boolean} | null>(null);
     const rootRef = useRef<HTMLDivElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
@@ -36,9 +66,11 @@ const ScheduleMenuButton: React.FC<Props> = ({draft, updateText}) => {
             return undefined;
         }
         const onDoc = (event: MouseEvent) => {
-            if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-                setOpen(false);
+            const target = event.target as Node;
+            if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) {
+                return;
             }
+            setOpen(false);
         };
         const onKey = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -57,7 +89,9 @@ const ScheduleMenuButton: React.FC<Props> = ({draft, updateText}) => {
         return null;
     }
 
-    const hasFiles = (draft.fileInfos?.length ?? 0) > 0 || (draft.uploadsInProgress?.length ?? 0) > 0;
+    const files = draftFiles(draft);
+    const uploading = (draft.uploadsInProgress?.length ?? 0) > 0;
+    const canSchedule = !uploading && (draft.message.trim() !== '' || files.length > 0);
     const isDirect = channelType === 'D';
 
     const toggle = () => {
@@ -74,23 +108,31 @@ const ScheduleMenuButton: React.FC<Props> = ({draft, updateText}) => {
     };
 
     const onLater = () => {
-        if (hasFiles || !draft.message.trim()) {
+        if (!canSchedule) {
             return;
         }
-        handComposerDraft(() => updateText(''));
-        dispatch(openScheduleModal(draft.message));
+        handComposerDraft(() => clearComposer(draft, updateText));
+        dispatch(openScheduleModal(draft.message, {
+            fileIds: files.map((file) => file.id),
+            fileNames: files.map((file) => file.name),
+            rootId: draft.rootId ?? '',
+            channelId: draft.channelId,
+        }));
         setOpen(false);
     };
 
     const onOnline = async () => {
-        if (hasFiles || busyRef.current || !draft.message.trim()) {
+        if (!isDirect || !canSchedule || busyRef.current) {
             return;
         }
         busyRef.current = true;
         setError(null);
         try {
-            await createWhenOnline(draft.channelId, draft.message);
-            updateText('');
+            await createWhenOnline(draft.channelId, draft.message, {
+                fileIds: files.map((file) => file.id),
+                rootId: draft.rootId ?? '',
+            });
+            clearComposer(draft, updateText);
             emitScheduledChanged();
             setOpen(false);
         } catch (e: any) {
@@ -120,23 +162,29 @@ const ScheduleMenuButton: React.FC<Props> = ({draft, updateText}) => {
             ref={rootRef}
             style={wrapStyle}
         >
-            <button
-                ref={buttonRef}
-                type='button'
-                aria-label='Отложить сообщение'
-                aria-expanded={open}
-                aria-haspopup='menu'
-                onClick={toggle}
-                style={buttonStyle}
+            <HoverTip
+                label='Отложить сообщение'
+                suppressed={open}
             >
-                <ClockIcon size={18}/>
-            </button>
-            {open && anchor && (
+                <button
+                    ref={buttonRef}
+                    type='button'
+                    aria-label='Отложить сообщение'
+                    aria-expanded={open}
+                    aria-haspopup='menu'
+                    onClick={toggle}
+                    style={buttonStyle}
+                >
+                    <ClockIcon size={18}/>
+                </button>
+            </HoverTip>
+            {open && anchor && mountOnBody(
                 <div
+                    ref={menuRef}
                     role='menu'
                     style={menuStyle}
                 >
-                    {hasFiles && <div style={warnStyle}>{'Вложения отложить нельзя.'}</div>}
+                    {uploading && <div style={warnStyle}>{'Дождитесь загрузки файлов.'}</div>}
                     <button
                         type='button'
                         role='menuitem'
@@ -156,7 +204,7 @@ const ScheduleMenuButton: React.FC<Props> = ({draft, updateText}) => {
                         </button>
                     )}
                     {error && <div style={errorStyle}>{error}</div>}
-                </div>
+                </div>,
             )}
         </div>
     );

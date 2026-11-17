@@ -84,7 +84,7 @@ type ChannelOption = {id: string; label: string; type: string};
 
 const ScheduleModal: React.FC = () => {
     const dispatch = useDispatch();
-    const {modalOpen, initialMessage, editing, convertOnline} = useSelector(selectPluginState);
+    const {modalOpen, initialMessage, editing, convertOnline, fileIds, fileNames, rootId, channelId: draftChannelId} = useSelector(selectPluginState);
     const currentChannelId = useSelector((s: any) => s?.entities?.channels?.currentChannelId as string | undefined);
     const allChannels = useSelector((s: any) => s?.entities?.channels?.channels as Record<string, any> | undefined);
     const myMembers = useSelector((s: any) => s?.entities?.channels?.myMembers as Record<string, any> | undefined);
@@ -172,9 +172,10 @@ const ScheduleModal: React.FC = () => {
         if (!modalOpen) {
             return;
         }
+        const composerChannelId = draftChannelId || currentChannelId;
         const seededChannelIds = editing ?
             (editing.channel_ids ?? []) :
-            (currentChannelId ? [currentChannelId] : []);
+            (composerChannelId ? [composerChannelId] : []);
         setChannelIds(seededChannelIds);
         setChannelQuery('');
         setChannelMenuOpen(false);
@@ -380,16 +381,31 @@ const ScheduleModal: React.FC = () => {
     };
 
     const repeatPreview = describeRepeat();
+    const attachedIds = fileIds ?? [];
+    const threadRoot = rootId ?? '';
+    const singleTarget = attachedIds.length > 0 || threadRoot !== '';
 
     const onSubmit = async () => {
         setError(null);
         const trimmed = messages.map((m) => m.trim()).filter((m) => m !== '');
-        if (trimmed.length === 0) {
-            setError('Введите текст.');
+        if (trimmed.length === 0 && attachedIds.length === 0) {
+            setError('Введите текст или прикрепите файл.');
             return;
         }
         if (channelIds.length === 0) {
             setError('Выберите хотя бы один канал.');
+            return;
+        }
+        if (attachedIds.length > 0 && channelIds.length !== 1) {
+            setError('Вложения можно отложить только в один канал.');
+            return;
+        }
+        if (threadRoot && channelIds.length !== 1) {
+            setError('Ответ в тред можно отложить только в один канал.');
+            return;
+        }
+        if (attachedIds.length > 0 && repeat) {
+            setError('Повторяющееся сообщение не может содержать вложения.');
             return;
         }
 
@@ -399,10 +415,12 @@ const ScheduleModal: React.FC = () => {
                 await updateScheduled({
                     id: editing.id,
                     channel_ids: channelIds,
-                    message: trimmed[0],
+                    message: trimmed[0] ?? '',
                     send_at: '',
                     timezone: tz,
                     trigger: '',
+                    ...(attachedIds.length > 0 ? {file_ids: attachedIds} : {}),
+                    ...(threadRoot ? {root_id: threadRoot} : {}),
                 });
                 emitScheduledChanged();
                 releaseComposerDraft();
@@ -443,7 +461,7 @@ const ScheduleModal: React.FC = () => {
         const useMessagesArray = repeat && trimmed.length >= 2;
         const payload = {
             channel_ids: channelIds,
-            message: trimmed[0],
+            message: trimmed[0] ?? '',
             send_at: sendAt,
             timezone: tz,
             repeat: repeat || undefined,
@@ -452,6 +470,8 @@ const ScheduleModal: React.FC = () => {
             ends_after: repeat && endsMode === 'after' ? endsAfter : undefined,
             window_ms: useRange && windowMinutes > 0 ? windowMinutes * 60_000 : undefined,
             messages: useMessagesArray ? trimmed : undefined,
+            ...(attachedIds.length > 0 ? {file_ids: attachedIds} : {}),
+            ...(threadRoot ? {root_id: threadRoot} : {}),
         };
         setSubmitting(true);
         try {
@@ -516,19 +536,21 @@ const ScheduleModal: React.FC = () => {
                                     style={chipStyle}
                                 >
                                     {channelLabelById(id)}
-                                    <button
-                                        type='button'
-                                        aria-label={`Убрать ${channelLabelById(id)}`}
-                                        onClick={() => toggleChannel(id)}
-                                        style={chipRemoveStyle}
-                                    >
-                                        {'×'}
-                                    </button>
+                                    {!singleTarget && (
+                                        <button
+                                            type='button'
+                                            aria-label={`Убрать ${channelLabelById(id)}`}
+                                            onClick={() => toggleChannel(id)}
+                                            style={chipRemoveStyle}
+                                        >
+                                            {'×'}
+                                        </button>
+                                    )}
                                 </span>
                             ))}
                         </div>
                     )}
-                    <input
+                    {!singleTarget && <input
                         ref={channelInputRef}
                         type='text'
                         value={channelQuery}
@@ -599,8 +621,8 @@ const ScheduleModal: React.FC = () => {
                             }
                         }}
                         style={inputStyle}
-                    />
-                    {channelMenuOpen && filteredChannels.length > 0 && (
+                    />}
+                    {!singleTarget && channelMenuOpen && filteredChannels.length > 0 && (
                         <ul
                             id='schedule-channel-listbox'
                             role='listbox'
@@ -640,7 +662,7 @@ const ScheduleModal: React.FC = () => {
                             })}
                         </ul>
                     )}
-                    {channelMenuOpen && filteredChannels.length === 0 && (
+                    {!singleTarget && channelMenuOpen && filteredChannels.length === 0 && (
                         <div style={pickerEmptyStyle}>{'Ничего не найдено.'}</div>
                     )}
                 </div>
@@ -650,6 +672,16 @@ const ScheduleModal: React.FC = () => {
                     </div>
                 )}
                     </>
+                )}
+                {attachedIds.length > 0 && (
+                    <div style={previewStyle}>
+                        {fileNames.length > 0
+                            ? `Вложения: ${fileNames.join(', ')}. Повтор недоступен.`
+                            : `Вложений: ${attachedIds.length}. Повтор недоступен.`}
+                    </div>
+                )}
+                {threadRoot !== '' && (
+                    <div style={previewStyle}>{'Сообщение уйдёт ответом в этот тред.'}</div>
                 )}
 
                 <label style={labelStyle}>
@@ -750,7 +782,8 @@ const ScheduleModal: React.FC = () => {
 
                 <label style={labelStyle}>{'Повтор'}</label>
                 <select
-                    value={repeat}
+                    value={attachedIds.length > 0 ? '' : repeat}
+                    disabled={attachedIds.length > 0}
                     onChange={(e) => setRepeat(e.target.value as RepeatKind)}
                     style={inputStyle}
                 >

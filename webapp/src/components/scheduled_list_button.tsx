@@ -5,10 +5,12 @@ import {cancelScheduled, fetchScheduledForChannel, sendScheduledNow} from '../cl
 import {emitScheduledChanged, SCHEDULED_CHANGED_EVENT} from '../events';
 import {openScheduleModalForEdit} from '../redux';
 import type {ScheduledMessage} from '../types';
+import {HoverTip, mountOnBody} from './overlay';
 
 type Draft = {
     message: string;
     channelId: string;
+    rootId?: string;
 };
 
 type Props = {
@@ -48,6 +50,7 @@ const ScheduledListButton: React.FC<Props> = ({draft}) => {
     const [anchor, setAnchor] = useState<Anchor | null>(null);
     const [menu, setMenu] = useState<MenuPoint | null>(null);
     const rootRef = useRef<HTMLDivElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const busyRef = useRef(false);
 
@@ -92,10 +95,12 @@ const ScheduledListButton: React.FC<Props> = ({draft}) => {
             return undefined;
         }
         const onDoc = (event: MouseEvent) => {
-            if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-                setOpen(false);
-                setMenu(null);
+            const target = event.target as Node;
+            if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) {
+                return;
             }
+            setOpen(false);
+            setMenu(null);
         };
         const onKey = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -128,7 +133,9 @@ const ScheduledListButton: React.FC<Props> = ({draft}) => {
         setOpen(true);
     };
 
-    const selected = menu ? items.find((item) => item.id === menu.id) : undefined;
+    const rootId = draft.rootId ?? '';
+    const visible = items.filter((item) => (item.root_id ?? '') === rootId);
+    const selected = menu ? visible.find((item) => item.id === menu.id) : undefined;
 
     const edit = (message: ScheduledMessage, convertOnline: boolean) => {
         setOpen(false);
@@ -199,50 +206,63 @@ const ScheduledListButton: React.FC<Props> = ({draft}) => {
             ref={rootRef}
             style={wrapStyle}
         >
-            <button
-                ref={buttonRef}
-                type='button'
-                aria-label='Отложенные сообщения канала'
-                aria-expanded={open}
-                onClick={toggle}
-                style={buttonStyle}
+            <HoverTip
+                label='Отложенные сообщения'
+                suppressed={open}
             >
-                <ListIcon/>
-                {items.length > 0 && <span style={dotStyle}/>}
-            </button>
-            {open && anchor && (
-                <div
-                    style={panelStyle}
-                    onMouseDown={(event) => {
-                        if (event.button === 0) {
-                            setMenu(null);
-                        }
-                    }}
+                <button
+                    ref={buttonRef}
+                    type='button'
+                    aria-label='Отложенные сообщения'
+                    aria-expanded={open}
+                    onClick={toggle}
+                    style={buttonStyle}
                 >
-                    {error && <div style={errorStyle}>{error}</div>}
-                    {items.length === 0 && !error && (
-                        <div style={emptyStyle}>{'В этом канале нет отложенных сообщений.'}</div>
-                    )}
-                    {items.map((item) => (
+                    <ListIcon/>
+                    {visible.length > 0 && <span style={dotStyle}/>}
+                </button>
+            </HoverTip>
+            {(open || menu) && mountOnBody(
+                <div ref={menuRef}>
+                    {open && anchor && (
                         <div
-                            key={item.id}
-                            style={rowStyle}
-                            onContextMenu={(event) => {
-                                event.preventDefault();
-                                setMenu({id: item.id, left: event.clientX, top: event.clientY});
+                            style={panelStyle}
+                            onMouseDown={(event) => {
+                                if (event.button === 0) {
+                                    setMenu(null);
+                                }
                             }}
                         >
-                            <div style={messageStyle}>{item.message}</div>
-                            <div style={whenStyle}>{whenLabel(item)}</div>
+                            {error && <div style={errorStyle}>{error}</div>}
+                            {visible.length === 0 && !error && (
+                                <div style={emptyStyle}>
+                                    {rootId ? 'В этом треде нет отложенных сообщений.' : 'В этом канале нет отложенных сообщений.'}
+                                </div>
+                            )}
+                            {visible.map((item) => (
+                                <div
+                                    key={item.id}
+                                    style={rowStyle}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        setMenu({id: item.id, left: event.clientX, top: event.clientY});
+                                    }}
+                                >
+                                    <div style={messageStyle}>
+                                        {item.message.trim() || (item.file_ids?.length ? 'Вложение' : '')}
+                                    </div>
+                                    <div style={whenStyle}>
+                                        {[whenLabel(item), item.file_ids?.length ? `вложений: ${item.file_ids.length}` : ''].filter(Boolean).join(' · ')}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                    ))}
-                </div>
-            )}
-            {menu && selected && (
-                <div
-                    role='menu'
-                    style={contextStyle}
-                >
+                    )}
+                    {menu && selected && (
+                        <div
+                            role='menu'
+                            style={contextStyle}
+                        >
                     <button type='button' role='menuitem' style={itemStyle} onClick={() => edit(selected, false)}>
                         {'Изменить'}
                     </button>
@@ -263,7 +283,9 @@ const ScheduledListButton: React.FC<Props> = ({draft}) => {
                     >
                         {'Изменить время'}
                     </button>
-                </div>
+                        </div>
+                    )}
+                </div>,
             )}
         </div>
     );

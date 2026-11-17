@@ -51,13 +51,19 @@ export const createScheduled = async (payload: CreatePayload): Promise<Scheduled
     })).data;
 
 // Online create must not send send_at or peer_id. Draft clears only on 201.
-export const createWhenOnline = async (channelId: string, message: string): Promise<void> => {
+export const createWhenOnline = async (
+    channelId: string,
+    message: string,
+    extra?: {fileIds?: string[]; rootId?: string},
+): Promise<void> => {
     const {status} = await request<ScheduledMessage>('/create', {
         method: 'POST',
         body: JSON.stringify({
             trigger: 'online',
             channel_ids: [channelId],
             message,
+            ...(extra?.fileIds?.length ? {file_ids: extra.fileIds} : {}),
+            ...(extra?.rootId ? {root_id: extra.rootId} : {}),
         }),
     });
     if (status !== 201) {

@@ -80,6 +80,8 @@ type scheduleRequest struct {
 	WindowMs   int64    `json:"window_ms,omitempty"`
 	Messages   []string `json:"messages,omitempty"`
 	Trigger    string   `json:"trigger,omitempty"`
+	FileIDs    []string `json:"file_ids,omitempty"`
+	RootID     string   `json:"root_id,omitempty"`
 }
 
 type acceptedSchedule struct {
@@ -95,6 +97,8 @@ type acceptedSchedule struct {
 	windowMs  int64
 	trigger   string
 	peerID    string
+	fileIDs   []string
+	rootID    string
 }
 
 func (p *Plugin) apiCreate(w http.ResponseWriter, r *http.Request, userID string) {
@@ -123,6 +127,8 @@ func (p *Plugin) apiCreate(w http.ResponseWriter, r *http.Request, userID string
 		EndsAfter:  fields.endsAfter,
 		Trigger:    fields.trigger,
 		PeerID:     fields.peerID,
+		FileIDs:    fields.fileIDs,
+		RootID:     fields.rootID,
 	}
 	if len(fields.messages) > 0 {
 		msg.Messages = fields.messages
@@ -162,7 +168,7 @@ func (p *Plugin) apiUpdate(w http.ResponseWriter, r *http.Request, userID string
 	// A presence row with no send_at stays presence: only the text changes.
 	if existing.Trigger == TriggerOnline && body.Trigger == "" && strings.TrimSpace(body.SendAt) == "" {
 		body.Message = strings.TrimSpace(body.Message)
-		if body.Message == "" {
+		if body.Message == "" && len(existing.FileIDs) == 0 {
 			http.Error(w, "нужен текст", http.StatusBadRequest)
 			return
 		}
@@ -198,6 +204,8 @@ func (p *Plugin) apiUpdate(w http.ResponseWriter, r *http.Request, userID string
 	existing.EndsAfter = fields.endsAfter
 	existing.Trigger = fields.trigger
 	existing.PeerID = fields.peerID
+	existing.FileIDs = fields.fileIDs
+	existing.RootID = fields.rootID
 	if !equalStrings(existing.Messages, fields.messages) {
 		existing.Messages = fields.messages
 		existing.MessageCycle = nil
@@ -277,9 +285,10 @@ func (p *Plugin) apiSend(w http.ResponseWriter, r *http.Request, userID string) 
 var scheduleNow = time.Now
 
 // acceptSchedule applies the create checks. quota is false for update.
-// The order is the body contract: trigger, trim, channels, caps, optional quota,
-// permission, rune length. TriggerOnline then calls validatePresence and skips
-// send time, recurrence and extras. An empty trigger keeps that timed path.
+// The order is the body contract: trigger, trim, channels, files, caps, optional quota,
+// permission, rune length, file and thread checks. TriggerOnline then calls
+// validatePresence and skips send time, recurrence and extras. An empty trigger
+// keeps that timed path.
 func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *scheduleRequest, quota bool) (*acceptedSchedule, bool) {
 	if body.Trigger != "" && body.Trigger != TriggerOnline {
 		http.Error(w, "неизвестный тип отправки", http.StatusBadRequest)
@@ -293,8 +302,22 @@ func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *sche
 		http.Error(w, "нужен канал", http.StatusBadRequest)
 		return nil, false
 	}
-	if body.Message == "" && len(body.Messages) == 0 {
+	fileIDs, fileErr := normalizeFileIDs(body.FileIDs)
+	if fileErr != nil {
+		http.Error(w, fileErr.Error(), http.StatusBadRequest)
+		return nil, false
+	}
+	rootID := strings.TrimSpace(body.RootID)
+	if body.Message == "" && len(body.Messages) == 0 && len(fileIDs) == 0 {
 		http.Error(w, "нужен текст", http.StatusBadRequest)
+		return nil, false
+	}
+	if (len(fileIDs) > 0 || rootID != "") && len(targets) != 1 {
+		http.Error(w, "вложения и ответ в тред можно отложить только в один канал", http.StatusBadRequest)
+		return nil, false
+	}
+	if len(fileIDs) > 0 && (body.Repeat != "" || len(body.Messages) > 0) {
+		http.Error(w, "повторяющееся сообщение не может содержать вложения", http.StatusBadRequest)
 		return nil, false
 	}
 	if len(targets) > maxChannelsPerMessage {
@@ -331,6 +354,20 @@ func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *sche
 		http.Error(w, "сообщение длиннее допустимого", http.StatusBadRequest)
 		return nil, false
 	}
+	if len(fileIDs) > 0 {
+		if err := p.checkFiles(userID, targets[0], fileIDs); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return nil, false
+		}
+	}
+	if rootID != "" {
+		canonical, err := p.checkRoot(targets[0], rootID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return nil, false
+		}
+		rootID = canonical
+	}
 	if body.Trigger == TriggerOnline {
 		peer, err := validatePresence(p.gate, userID, targets, body.Repeat, body.WindowMs, body.Messages)
 		if err != nil {
@@ -342,6 +379,8 @@ func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *sche
 			message: body.Message,
 			trigger: TriggerOnline,
 			peerID:  peer,
+			fileIDs: fileIDs,
+			rootID:  rootID,
 		}, true
 	}
 
@@ -382,6 +421,8 @@ func (p *Plugin) acceptSchedule(w http.ResponseWriter, userID string, body *sche
 		timezone: tz,
 		repeat:   body.Repeat,
 		windowMs: body.WindowMs,
+		fileIDs:  fileIDs,
+		rootID:   rootID,
 	}
 	if body.Repeat != "" {
 		out.endsMode = body.EndsMode
@@ -413,6 +454,72 @@ func textTooLong(api postGate, message string, messages []string) bool {
 		}
 	}
 	return false
+}
+
+// normalizeFileIDs trims, drops blanks, dedupes and rejects a bad id or too many files.
+func normalizeFileIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if !model.IsValidId(id) {
+			return nil, errors.New("некорректный файл")
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) > maxFilesPerMessage {
+		return nil, errors.New("слишком много вложений")
+	}
+	return out, nil
+}
+
+// checkFiles requires each id to be an unattached file of this user in this channel.
+// An empty ChannelId is an upload that is not yet tied to a post.
+func (p *Plugin) checkFiles(userID, channelID string, ids []string) error {
+	for _, id := range ids {
+		info, appErr := p.gate.GetFileInfo(id)
+		if appErr != nil || info == nil || info.DeleteAt != 0 {
+			return errors.New("файл не найден")
+		}
+		if info.CreatorId != userID {
+			return errors.New("нельзя приложить чужой файл")
+		}
+		if info.PostId != "" {
+			return errors.New("файл уже прикреплён к сообщению")
+		}
+		if info.ChannelId != "" && info.ChannelId != channelID {
+			return errors.New("файл из другого канала")
+		}
+	}
+	return nil
+}
+
+// checkRoot returns the thread root. A reply id is rewritten to its root.
+func (p *Plugin) checkRoot(channelID, rootID string) (string, error) {
+	if !model.IsValidId(rootID) {
+		return "", errors.New("некорректный тред")
+	}
+	post, appErr := p.gate.GetPost(rootID)
+	if appErr != nil || post == nil || post.DeleteAt != 0 {
+		return "", errors.New("тред не найден")
+	}
+	if post.ChannelId != channelID {
+		return "", errors.New("тред из другого канала")
+	}
+	if post.RootId != "" {
+		return post.RootId, nil
+	}
+	return post.Id, nil
 }
 
 // normalizeChannelIDs collapses channel_ids and the legacy channel_id into

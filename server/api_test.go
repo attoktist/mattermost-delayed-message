@@ -821,3 +821,169 @@ func TestListFiltersByChannel(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	require.Equal(t, "некорректный канал", strings.TrimSpace(rec.Body.String()))
 }
+
+func TestCreateWithFileAndThread(t *testing.T) {
+	channelID := model.NewId()
+	fileID := model.NewId()
+	rootID := model.NewId()
+	replyID := model.NewId()
+	p, fake := newAPIPlugin(&model.Channel{}, true)
+	fake.files = map[string]*model.FileInfo{
+		fileID: {Id: fileID, CreatorId: "user-a", ChannelId: channelID},
+	}
+	fake.posts = map[string]*model.Post{
+		rootID:  {Id: rootID, ChannelId: channelID},
+		replyID: {Id: replyID, ChannelId: channelID, RootId: rootID},
+	}
+
+	rec := callJSON(t, p, http.MethodPost, "/api/create", "user-a", createBody(
+		[]string{channelID},
+		"",
+		map[string]any{"file_ids": []string{fileID}, "root_id": replyID},
+	))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	stored, err := listMessagesForUser(fake, "user-a")
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Empty(t, stored[0].Message)
+	require.Equal(t, []string{fileID}, stored[0].FileIDs)
+	require.Equal(t, rootID, stored[0].RootID)
+}
+
+func TestCreateOnlineKeepsFilesAndThread(t *testing.T) {
+	channelID := model.NewId()
+	fileID := model.NewId()
+	rootID := model.NewId()
+	peer := model.NewId()
+	p, fake := newAPIPlugin(&model.Channel{Type: model.ChannelTypeDirect, Name: "user-a__" + peer}, true)
+	fake.files = map[string]*model.FileInfo{
+		fileID: {Id: fileID, CreatorId: "user-a", ChannelId: channelID},
+	}
+	fake.posts = map[string]*model.Post{
+		rootID: {Id: rootID, ChannelId: channelID},
+	}
+
+	rec := callJSON(t, p, http.MethodPost, "/api/create", "user-a", createBody(
+		[]string{channelID},
+		"ping",
+		map[string]any{
+			"trigger":  "online",
+			"send_at":  "",
+			"file_ids": []string{fileID},
+			"root_id":  rootID,
+		},
+	))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	stored, err := listMessagesForUser(fake, "user-a")
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Equal(t, TriggerOnline, stored[0].Trigger)
+	require.Equal(t, []string{fileID}, stored[0].FileIDs)
+	require.Equal(t, rootID, stored[0].RootID)
+}
+
+func TestUpdateKeepsFileAndRoot(t *testing.T) {
+	channelID := model.NewId()
+	fileID := model.NewId()
+	rootID := model.NewId()
+	p, fake := newAPIPlugin(&model.Channel{}, true)
+	fake.files = map[string]*model.FileInfo{
+		fileID: {Id: fileID, CreatorId: "user-a", ChannelId: channelID},
+	}
+	fake.posts = map[string]*model.Post{
+		rootID: {Id: rootID, ChannelId: channelID},
+	}
+	id := model.NewId()
+	require.NoError(t, saveMessage(fake, &ScheduledMessage{
+		ID: id, UserID: "user-a", ChannelIDs: []string{channelID},
+		Message: "old", Status: StatusPending, SendAt: time.Now().Add(time.Hour).UnixMilli(),
+		FileIDs: []string{fileID}, RootID: rootID,
+	}))
+
+	rec := callJSON(t, p, http.MethodPatch, "/api/update", "user-a", createBody(
+		[]string{channelID},
+		"new",
+		map[string]any{"id": id, "file_ids": []string{fileID}, "root_id": rootID},
+	))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	stored, err := loadMessage(fake, "user-a", id)
+	require.NoError(t, err)
+	require.Equal(t, "new", stored.Message)
+	require.Equal(t, []string{fileID}, stored.FileIDs)
+	require.Equal(t, rootID, stored.RootID)
+}
+
+func TestPresenceTextUpdateKeepsFiles(t *testing.T) {
+	channelID := model.NewId()
+	fileID := model.NewId()
+	rootID := model.NewId()
+	p, fake := newAPIPlugin(&model.Channel{}, true)
+	id := model.NewId()
+	require.NoError(t, saveMessage(fake, &ScheduledMessage{
+		ID: id, UserID: "user-a", ChannelIDs: []string{channelID},
+		Message: "old", Status: StatusPending, Trigger: TriggerOnline, PeerID: "peer",
+		FileIDs: []string{fileID}, RootID: rootID,
+	}))
+
+	rec := callJSON(t, p, http.MethodPatch, "/api/update", "user-a", map[string]any{
+		"id": id, "channel_ids": []string{channelID}, "message": "", "send_at": "",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	stored, err := loadMessage(fake, "user-a", id)
+	require.NoError(t, err)
+	require.Empty(t, stored.Message)
+	require.Equal(t, []string{fileID}, stored.FileIDs)
+	require.Equal(t, rootID, stored.RootID)
+}
+
+func TestCreateRejectsBadAttachment(t *testing.T) {
+	channelID := model.NewId()
+	otherChannel := model.NewId()
+	own := model.NewId()
+	foreign := model.NewId()
+	attached := model.NewId()
+	otherChFile := model.NewId()
+	rootID := model.NewId()
+	p, fake := newAPIPlugin(&model.Channel{}, true)
+	fake.files = map[string]*model.FileInfo{
+		own:         {Id: own, CreatorId: "user-a", ChannelId: channelID},
+		foreign:     {Id: foreign, CreatorId: "user-b", ChannelId: channelID},
+		attached:    {Id: attached, CreatorId: "user-a", ChannelId: channelID, PostId: model.NewId()},
+		otherChFile: {Id: otherChFile, CreatorId: "user-a", ChannelId: otherChannel},
+	}
+	fake.posts = map[string]*model.Post{
+		rootID: {Id: rootID, ChannelId: otherChannel},
+	}
+	tooMany := make([]string, maxFilesPerMessage+1)
+	for i := range tooMany {
+		tooMany[i] = model.NewId()
+	}
+
+	cases := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{"bad id", createBody([]string{channelID}, "hi", map[string]any{"file_ids": []string{"nope"}}), "некорректный файл"},
+		{"missing", createBody([]string{channelID}, "hi", map[string]any{"file_ids": []string{model.NewId()}}), "файл не найден"},
+		{"foreign", createBody([]string{channelID}, "hi", map[string]any{"file_ids": []string{foreign}}), "нельзя приложить чужой файл"},
+		{"attached", createBody([]string{channelID}, "hi", map[string]any{"file_ids": []string{attached}}), "файл уже прикреплён к сообщению"},
+		{"other channel file", createBody([]string{channelID}, "hi", map[string]any{"file_ids": []string{otherChFile}}), "файл из другого канала"},
+		{"too many", createBody([]string{channelID}, "hi", map[string]any{"file_ids": tooMany}), "слишком много вложений"},
+		{"repeat", createBody([]string{channelID}, "hi", map[string]any{"file_ids": []string{own}, "repeat": "daily"}), "повторяющееся сообщение не может содержать вложения"},
+		{"two channels", createBody([]string{channelID, otherChannel}, "hi", map[string]any{"file_ids": []string{own}}), "вложения и ответ в тред можно отложить только в один канал"},
+		{"root other channel", createBody([]string{channelID}, "hi", map[string]any{"root_id": rootID}), "тред из другого канала"},
+		{"bad root", createBody([]string{channelID}, "hi", map[string]any{"root_id": "nope"}), "некорректный тред"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := callJSON(t, p, http.MethodPost, "/api/create", "user-a", tc.body)
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			require.Equal(t, tc.want, strings.TrimSpace(rec.Body.String()))
+		})
+	}
+}
